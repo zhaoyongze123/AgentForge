@@ -64,3 +64,28 @@ AgentForge 是一个以控制平面为核心的 agent 驱动研发流水线系�
 3. `docs/BOOTSTRAP_PROMPT.md`
 
 然后按 `BOOTSTRAP_PROMPT.md` 的要求建立上下文、输出理解、收敛架构，再进入任务拆分与执行。
+
+## 代码骨架
+
+仓库现在包含一套最小 TypeScript 代码骨架，用来把文档 contract 先落成可执行入口：
+
+- `src/domain`
+  核心类型，包括 `TaskUnit`、`AcceptanceResult`、`KnowledgeRecord`
+- `src/services`
+  `Planner`、`Dispatcher`、`Evaluator`、`KnowledgeWorkflow`
+- `src/workflow`
+  `WorkflowEngine`，负责把任务流和知识流串起来
+- `src/runtime`
+  内存版存储，作为后续接数据库前的占位实现
+- `tests`
+  最小工作流回归测试
+
+## 快速开始
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+npm start
+```
