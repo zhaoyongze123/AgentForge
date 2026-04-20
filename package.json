@@ -7,16 +7,40 @@
   "main": "dist/src/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "compose:dev": "docker compose -f docker-compose.dev.yml up --build",
+    "compose:down": "docker compose -f docker-compose.dev.yml down",
+    "lint": "eslint . --ext .ts",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"*.json\" \"*.mjs\" \".github/workflows/*.yml\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/tests/*.test.js",
-    "start": "node dist/src/index.js"
+    "release:check": "bash ./scripts/release-check.sh",
+    "backup": "bash ./scripts/backup.sh",
+    "start": "node dist/src/index.js",
+    "db:migrate": "node dist/src/scripts/db-migrate.js up",
+    "db:rollback": "node dist/src/scripts/db-migrate.js down",
+    "temporal:worker": "npm run build && node dist/src/scripts/temporal-worker.js",
+    "temporal:smoke": "npm run build && node dist/src/scripts/temporal-smoke.js"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
+    "@eslint/js": "^9.36.0",
     "@types/node": "^24.5.2",
-    "typescript": "^5.9.3"
+    "eslint": "^9.36.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.44.1"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.1.40",
+    "@langchain/langgraph": "^1.2.9",
+    "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@temporalio/activity": "^1.16.0",
+    "@temporalio/client": "^1.16.0",
+    "@temporalio/worker": "^1.16.0",
+    "@temporalio/workflow": "^1.16.0",
+    "zod": "^4.1.11"
   }
 }
-

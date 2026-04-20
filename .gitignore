@@ -1,9 +1,10 @@
 node_modules/
 dist/
+.agentforge/
+.tmp-runtime/
 .DS_Store
 .env
 .env.*
 coverage/
 *.log
 *.tsbuildinfo
-

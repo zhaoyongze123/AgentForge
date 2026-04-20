@@ -34,8 +34,18 @@ AgentForge 是一个以控制平面为核心的 agent 驱动研发流水线系�
   长期知识对象、知识身份、冲突检测、生命周期与 Obsidian 映射。
 - [docs/KNOWLEDGE_BUDGET.md](./docs/KNOWLEDGE_BUDGET.md)
   知识写入预算、Top-K 放行、队列与淘汰策略。
+- [docs/DEVELOPER_GUIDE.md](./docs/DEVELOPER_GUIDE.md)
+  本地开发、环境变量、运行模式与真实链路联调入口。
+- [docs/API.md](./docs/API.md)
+  控制平面 HTTP API、认证头、请求示例与回调入口。
+- [docs/KNOWLEDGE_GOVERNANCE.md](./docs/KNOWLEDGE_GOVERNANCE.md)
+  知识身份、冲突、预算、归档与人工 gate 的操作规则。
+- [docs/ops/OPERATIONS.md](./docs/ops/OPERATIONS.md)
+  发布、部署、备份恢复、健康检查与故障排查。
 - [docs/BOOTSTRAP_PROMPT.md](./docs/BOOTSTRAP_PROMPT.md)
   任何新线程的标准启动指令。
+- [docs/reuse/SECOND_PROJECT_DRILL_2026-04-17.md](./docs/reuse/SECOND_PROJECT_DRILL_2026-04-17.md)
+  第二项目模板复用演练记录。
 
 ## 当前默认边界
 
@@ -89,3 +99,20 @@ npm test
 npm run build
 npm start
 ```
+
+## 运行模式
+
+- `WORKFLOW_EXECUTOR=in_memory`
+  最快的本地回归模式，默认用于开发和大部分测试。
+- `WORKFLOW_EXECUTOR=langgraph`
+  使用真实 LangGraph 节点图编排，但不依赖 Temporal。
+- `WORKFLOW_EXECUTOR=temporal`
+  使用真实 Temporal workflow + worker，适合 durable workflow 联调。
+
+## 建议阅读顺序
+
+1. [docs/DEVELOPER_GUIDE.md](./docs/DEVELOPER_GUIDE.md)
+2. [docs/API.md](./docs/API.md)
+3. [docs/ops/OPERATIONS.md](./docs/ops/OPERATIONS.md)
+4. [docs/KNOWLEDGE_GOVERNANCE.md](./docs/KNOWLEDGE_GOVERNANCE.md)
+5. [templates/project-starter](./templates/project-starter)

@@ -1,13 +1,38 @@
-import { DEFAULT_KNOWLEDGE_BUDGET, DEFAULT_KNOWLEDGE_THRESHOLDS } from "../config/defaults.js";
+import {
+  DEFAULT_KNOWLEDGE_BUDGET,
+  DEFAULT_KNOWLEDGE_THRESHOLDS,
+} from "../config/defaults.js";
 import type { AcceptanceResult } from "../domain/acceptance.js";
-import type { BudgetDecision, KnowledgeCandidate, KnowledgeRecord } from "../domain/knowledge.js";
+import type {
+  BudgetDecision,
+  KnowledgeCandidate,
+  KnowledgeBudgetPolicy,
+  KnowledgeBudgetWindow,
+  KnowledgeRecord,
+} from "../domain/knowledge.js";
 import type { TaskUnit } from "../domain/task-unit.js";
 import { InMemoryStore } from "../runtime/in-memory-store.js";
+import { KnowledgeRegistry } from "./knowledge-registry.js";
+import { Mem0Adapter } from "./mem0-adapter.js";
+import { ObsidianKnowledgeService } from "./obsidian-knowledge.js";
 
 export class KnowledgeWorkflow {
-  constructor(private readonly store: InMemoryStore) {}
+  private readonly registry = new KnowledgeRegistry();
+  private readonly mem0: Mem0Adapter;
+  private readonly budgetPolicy: KnowledgeBudgetPolicy =
+    DEFAULT_KNOWLEDGE_BUDGET;
 
-  createCandidate(task: TaskUnit, acceptance: AcceptanceResult): KnowledgeCandidate | null {
+  constructor(
+    private readonly store: InMemoryStore,
+    private readonly obsidian: ObsidianKnowledgeService | null = null,
+  ) {
+    this.mem0 = new Mem0Adapter(this.store);
+  }
+
+  createCandidate(
+    task: TaskUnit,
+    acceptance: AcceptanceResult,
+  ): KnowledgeCandidate | null {
     if (acceptance.status !== "passed") {
       return null;
     }
@@ -17,9 +42,12 @@ export class KnowledgeWorkflow {
     }
 
     if (
-      acceptance.knowledgeSignal.reusableScore < DEFAULT_KNOWLEDGE_THRESHOLDS.reusableScore ||
-      acceptance.knowledgeSignal.stabilityScore < DEFAULT_KNOWLEDGE_THRESHOLDS.stabilityScore ||
-      acceptance.knowledgeSignal.confidence < DEFAULT_KNOWLEDGE_THRESHOLDS.confidence
+      acceptance.knowledgeSignal.reusableScore <
+        DEFAULT_KNOWLEDGE_THRESHOLDS.reusableScore ||
+      acceptance.knowledgeSignal.stabilityScore <
+        DEFAULT_KNOWLEDGE_THRESHOLDS.stabilityScore ||
+      acceptance.knowledgeSignal.confidence <
+        DEFAULT_KNOWLEDGE_THRESHOLDS.confidence
     ) {
       return null;
     }
@@ -29,15 +57,17 @@ export class KnowledgeWorkflow {
       0.25 * acceptance.knowledgeSignal.noveltyScore +
       0.2 * acceptance.knowledgeSignal.confidence +
       0.1 * acceptance.knowledgeSignal.impactScore;
+    const draft = acceptance.knowledgeDraft;
 
-    const candidate: KnowledgeCandidate = {
+    const candidate = this.registry.normalizeCandidate({
       candidateId: `kc-${task.taskId}`,
       knowledgeId: this.buildKnowledgeId(task),
       scope: this.buildScope(task),
-      summary: `${task.title} 的稳定经验`,
-      recommendation: task.goal,
-      sourceRefs: [`task:${task.taskId}`],
+      summary: draft?.summary ?? `${task.title} 的稳定经验`,
+      recommendation: draft?.recommendation ?? task.goal,
+      sourceRefs: draft?.sourceRefs ?? [`task:${task.taskId}`],
       candidateType: acceptance.knowledgeSignal.candidateType,
+      createdAt: new Date().toISOString(),
       scores: {
         reusableScore: acceptance.knowledgeSignal.reusableScore,
         noveltyScore: acceptance.knowledgeSignal.noveltyScore,
@@ -46,72 +76,327 @@ export class KnowledgeWorkflow {
         impactScore: acceptance.knowledgeSignal.impactScore,
         publishScore,
       },
-    };
+    });
 
+    candidate.mem0Key = this.mem0.buildCandidateKey(candidate);
+    this.registry.recordCandidateCreated(candidate);
+    this.mem0.saveCandidate(candidate);
     this.store.candidateQueue.push(candidate);
     return candidate;
   }
 
   evaluateBudget(candidate: KnowledgeCandidate): BudgetDecision {
+    const activeWindow = this.ensureActiveWindow(candidate.createdAt);
+    const rankedQueue = this.rankCandidates();
+    const queuePosition =
+      rankedQueue.findIndex(
+        (item) => item.candidateId === candidate.candidateId,
+      ) + 1;
+    const scopePolicy = this.resolveScopePolicy(candidate.scope);
+    const scopePublished = activeWindow.publishedByScope[candidate.scope] ?? 0;
+    const belowArchiveThreshold =
+      candidate.scores.publishScore <
+      this.budgetPolicy.archiveBelowPublishScore;
+
     if (
-      this.store.publishedInCurrentWindow.length >= DEFAULT_KNOWLEDGE_BUDGET.maxWikiWritesPerHour ||
-      this.store.candidateQueue.length > DEFAULT_KNOWLEDGE_BUDGET.maxKnowledgeTasksInQueue
+      this.store.candidateQueue.length >
+      this.budgetPolicy.maxKnowledgeTasksInQueue
     ) {
-      return { allowed: false, reason: "deferred" };
+      if (belowArchiveThreshold) {
+        return this.archiveDecision(candidate, queuePosition, activeWindow);
+      }
+      return this.deferDecision(candidate, queuePosition, activeWindow);
     }
 
-    const ranked = [...this.store.candidateQueue].sort(
-      (left, right) => right.scores.publishScore - left.scores.publishScore,
-    );
-    const topCandidates = ranked
-      .slice(0, DEFAULT_KNOWLEDGE_BUDGET.topKPerWindow)
+    if (activeWindow.publishedCount >= this.budgetPolicy.maxWikiWritesPerHour) {
+      if (belowArchiveThreshold) {
+        return this.archiveDecision(candidate, queuePosition, activeWindow);
+      }
+      return this.deferDecision(candidate, queuePosition, activeWindow);
+    }
+
+    if (scopePublished >= scopePolicy.maxWikiWritesPerHour) {
+      if (belowArchiveThreshold) {
+        return this.archiveDecision(candidate, queuePosition, activeWindow);
+      }
+      return this.deferDecision(candidate, queuePosition, activeWindow);
+    }
+
+    const scopedTopK = rankedQueue
+      .filter((item) => item.scope === candidate.scope)
+      .slice(0, scopePolicy.topKPerWindow)
       .map((item) => item.candidateId);
 
-    if (!topCandidates.includes(candidate.candidateId)) {
-      return { allowed: false, reason: "deferred" };
+    if (!scopedTopK.includes(candidate.candidateId)) {
+      if (belowArchiveThreshold) {
+        return this.archiveDecision(candidate, queuePosition, activeWindow);
+      }
+      return this.deferDecision(candidate, queuePosition, activeWindow);
     }
 
-    return { allowed: true, reason: "publish" };
+    const globalTopK = rankedQueue
+      .slice(0, this.budgetPolicy.topKPerWindow)
+      .map((item) => item.candidateId);
+
+    if (!globalTopK.includes(candidate.candidateId)) {
+      if (belowArchiveThreshold) {
+        return this.archiveDecision(candidate, queuePosition, activeWindow);
+      }
+      return this.deferDecision(candidate, queuePosition, activeWindow);
+    }
+
+    return {
+      allowed: true,
+      reason: "publish",
+      queuePosition,
+      publishScore: candidate.scores.publishScore,
+      activeWindow,
+    };
   }
 
-  publish(candidate: KnowledgeCandidate): KnowledgeRecord {
-    const existing = this.store.knowledgeRecords.get(candidate.knowledgeId) ?? [];
-    const latestVersion = existing.at(-1)?.version ?? 0;
+  publish(candidate: KnowledgeCandidate): KnowledgeRecord | null {
+    const acceptance = this.store.acceptanceResults.get(
+      candidate.candidateId.replace(/^kc-/, ""),
+    );
+    const records = [...this.store.knowledgeRecords.values()].flat();
+    const analysis = this.registry.analyzeCandidate(candidate, records);
+    const decision = this.registry.decideReview(analysis);
+
+    if (decision.status === "archive" && analysis.duplicateOf) {
+      return null;
+    }
+
+    if (decision.status === "review") {
+      const conflictSource =
+        analysis.idConflictWith ?? analysis.scopeConflictWith;
+      if (conflictSource) {
+        const conflicted = this.registry.transitionStatus(
+          conflictSource,
+          "conflicted",
+          decision.reason,
+        );
+        const siblings =
+          this.store.knowledgeRecords.get(conflictSource.knowledgeId) ?? [];
+        this.store.knowledgeRecords.set(
+          conflictSource.knowledgeId,
+          siblings.map((record) =>
+            record.version === conflicted.version ? conflicted : record,
+          ),
+        );
+        return null;
+      }
+    }
+
+    const existing =
+      this.store.knowledgeRecords.get(
+        analysis.normalizedCandidate.knowledgeId,
+      ) ?? [];
+    const nextVersion = this.registry.nextVersion(
+      analysis.normalizedCandidate.knowledgeId,
+      existing,
+    );
 
     const record: KnowledgeRecord = {
-      knowledgeId: candidate.knowledgeId,
-      version: latestVersion + 1,
-      scope: candidate.scope,
+      knowledgeId: analysis.normalizedCandidate.knowledgeId,
+      version: nextVersion,
+      scope: analysis.normalizedCandidate.scope,
       status: "active",
-      title: candidate.summary,
-      summary: candidate.summary,
-      recommendation: candidate.recommendation,
-      constraints: [],
-      confidence: candidate.scores.confidence,
-      candidateType: candidate.candidateType,
-      sourceRefs: candidate.sourceRefs,
-      derivedFrom: [],
-      supersedes: latestVersion > 0 ? [`${candidate.knowledgeId}@${latestVersion}`] : [],
+      title:
+        acceptance?.knowledgeDraft?.title ??
+        analysis.normalizedCandidate.summary,
+      summary: analysis.normalizedCandidate.summary,
+      recommendation: analysis.normalizedCandidate.recommendation,
+      constraints: acceptance?.knowledgeDraft?.constraints ?? [],
+      confidence: analysis.normalizedCandidate.scores.confidence,
+      candidateType: analysis.normalizedCandidate.candidateType,
+      sourceRefs: analysis.normalizedCandidate.sourceRefs,
+      derivedFrom: acceptance?.knowledgeDraft?.derivedFrom ?? [],
+      supersedes:
+        existing.length > 0
+          ? [
+              `${analysis.normalizedCandidate.knowledgeId}@${
+                existing.at(-1)?.version ?? 0
+              }`,
+            ]
+          : [],
       updatedAt: new Date().toISOString(),
     };
 
-    this.store.knowledgeRecords.set(candidate.knowledgeId, [...existing, record]);
-    this.store.publishedInCurrentWindow.push(candidate);
+    const updatedExisting = this.registry.applySupersedes(existing, record);
+    this.store.knowledgeRecords.set(analysis.normalizedCandidate.knowledgeId, [
+      ...updatedExisting,
+      record,
+    ]);
+    this.store.publishedInCurrentWindow.push(analysis.normalizedCandidate);
+    this.incrementBudgetWindow(analysis.normalizedCandidate.scope);
+    this.registry.recordPublished(record);
     return record;
+  }
+
+  handleBudgetRejection(
+    candidate: KnowledgeCandidate,
+    decision: BudgetDecision,
+  ): void {
+    if (decision.reason === "archived") {
+      this.store.archivedCandidates.push({ candidate, decision });
+      this.mem0.saveDeferredCandidate(candidate);
+      return;
+    }
+
+    this.store.deferredCandidates.push({ candidate, decision });
+    this.mem0.saveDeferredCandidate(candidate);
+  }
+
+  async publishBudgetedCandidates(): Promise<KnowledgeRecord[]> {
+    const publishedRecords: KnowledgeRecord[] = [];
+
+    for (const candidate of this.rankCandidates()) {
+      const decision = this.evaluateBudget(candidate);
+      if (!decision.allowed) {
+        this.handleBudgetRejection(candidate, decision);
+        continue;
+      }
+
+      const publishedRecord = this.publish(candidate);
+      if (publishedRecord) {
+        if (this.obsidian) {
+          publishedRecord.notePath =
+            await this.obsidian.writeRecord(publishedRecord);
+        }
+        publishedRecords.push(publishedRecord);
+      }
+    }
+
+    return publishedRecords;
+  }
+
+  async syncArchivedKnowledge(): Promise<KnowledgeRecord[]> {
+    if (!this.obsidian) {
+      return [];
+    }
+
+    const archivedRecords: KnowledgeRecord[] = [];
+
+    for (const records of this.store.knowledgeRecords.values()) {
+      for (const record of records) {
+        if (record.status !== "archived" || !record.notePath) {
+          continue;
+        }
+
+        record.notePath = await this.obsidian.archiveRecord(record);
+        archivedRecords.push(record);
+      }
+    }
+
+    return archivedRecords;
   }
 
   private buildKnowledgeId(task: TaskUnit): string {
     return task.taskId.replace(/^task-/, "").replace(/-/g, ".");
   }
 
+  private rankCandidates(): KnowledgeCandidate[] {
+    const queue = [...this.store.candidateQueue];
+
+    if (!this.budgetPolicy.priorityQueue) {
+      return queue;
+    }
+
+    return queue.sort((left, right) => {
+      if (right.scores.publishScore !== left.scores.publishScore) {
+        return right.scores.publishScore - left.scores.publishScore;
+      }
+
+      return (left.createdAt ?? "").localeCompare(right.createdAt ?? "");
+    });
+  }
+
+  private ensureActiveWindow(referenceTime?: string): KnowledgeBudgetWindow {
+    const now = referenceTime ? new Date(referenceTime) : new Date();
+    const currentHour = new Date(now);
+    currentHour.setMinutes(0, 0, 0);
+    const windowStart = currentHour.toISOString();
+    const nextHour = new Date(currentHour);
+    nextHour.setHours(nextHour.getHours() + 1);
+    const windowEnd = nextHour.toISOString();
+
+    if (
+      !this.store.knowledgeBudgetWindow ||
+      this.store.knowledgeBudgetWindow.windowStart !== windowStart
+    ) {
+      this.store.knowledgeBudgetWindow = {
+        windowStart,
+        windowEnd,
+        publishedCount: 0,
+        publishedByScope: {},
+      };
+      this.store.publishedInCurrentWindow.length = 0;
+    }
+
+    return this.store.knowledgeBudgetWindow;
+  }
+
+  private incrementBudgetWindow(scope: string): void {
+    const window = this.ensureActiveWindow();
+    window.publishedCount += 1;
+    window.publishedByScope[scope] = (window.publishedByScope[scope] ?? 0) + 1;
+  }
+
+  private resolveScopePolicy(scope: string): {
+    maxWikiWritesPerHour: number;
+    topKPerWindow: number;
+  } {
+    return (
+      this.budgetPolicy.scopeLimits[scope] ?? {
+        maxWikiWritesPerHour: this.budgetPolicy.maxWikiWritesPerHour,
+        topKPerWindow: this.budgetPolicy.topKPerWindow,
+      }
+    );
+  }
+
+  private deferDecision(
+    candidate: KnowledgeCandidate,
+    queuePosition: number,
+    activeWindow: KnowledgeBudgetWindow,
+  ): BudgetDecision {
+    return {
+      allowed: false,
+      reason: "deferred",
+      queuePosition,
+      publishScore: candidate.scores.publishScore,
+      activeWindow,
+    };
+  }
+
+  private archiveDecision(
+    candidate: KnowledgeCandidate,
+    queuePosition: number,
+    activeWindow: KnowledgeBudgetWindow,
+  ): BudgetDecision {
+    return {
+      allowed: false,
+      reason: "archived",
+      queuePosition,
+      publishScore: candidate.scores.publishScore,
+      activeWindow,
+    };
+  }
+
   private buildScope(task: TaskUnit): string {
+    const segments = task.taskId.split("-").slice(0, 3).join("/");
+
     if (task.type === "frontend") {
-      return "frontend/general";
+      return `frontend/${segments}`;
+    }
+    if (task.type === "integration") {
+      return `integration/${segments}`;
+    }
+    if (task.type === "acceptance") {
+      return `acceptance/${segments}`;
     }
     if (task.type.startsWith("knowledge_")) {
-      return "knowledge/general";
+      return `knowledge/${segments}`;
     }
-    return "backend/general";
+    return `backend/${segments}`;
   }
 }
-

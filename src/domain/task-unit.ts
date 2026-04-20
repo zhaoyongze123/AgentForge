@@ -30,6 +30,7 @@ export interface KnowledgePolicy {
 }
 
 export interface TaskUnit {
+  planId?: string;
   taskId: string;
   title: string;
   goal: string;
@@ -57,5 +58,8 @@ export interface TaskUnit {
 export interface PlanInput {
   request: string;
   phase: string;
+  projectId?: string;
+  requester?: string;
+  constraints?: string[];
+  targetModules?: string[];
 }
-
