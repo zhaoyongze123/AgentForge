@@ -416,6 +416,57 @@ test("Playwright 结果采集适配层可解析截图、trace 与失败证据", 
   assert.equal(summary.evidence[0], "locator timeout");
 });
 
+test("Playwright 运行时适配层可注入 JSON reporter 并从 artifact 目录收集报告", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentforge-playwright-runtime-"));
+  const artifactDir = join(root, "artifacts");
+  await mkdir(artifactDir, { recursive: true });
+  const reportPath = join(artifactDir, "playwright-report.json");
+
+  await writeFile(
+    reportPath,
+    JSON.stringify({
+      suites: [
+        {
+          tests: [
+            {
+              results: [
+                {
+                  status: "passed",
+                  duration: 123,
+                  attachments: [
+                    {
+                      name: "trace",
+                      contentType: "application/zip",
+                      path: join(root, "trace.zip"),
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    }),
+    "utf8",
+  );
+
+  const adapter = new PlaywrightAdapter();
+  const prepared = adapter.prepareExecutionCommand(
+    "npx playwright test tests/e2e/demo.spec.ts",
+    artifactDir,
+  );
+  const collected = await adapter.collectFromRuntime(root, artifactDir, prepared.reportFile);
+
+  assert.equal(
+    prepared.command.includes("PLAYWRIGHT_JSON_OUTPUT_FILE"),
+    true,
+  );
+  assert.equal(prepared.command.includes("--reporter=json"), true);
+  assert.equal(collected?.reportPath, reportPath);
+  assert.equal(collected?.summary.passed, 1);
+  assert.equal(collected?.summary.traces.length, 1);
+});
+
 test("飞书通知与人工介入卡片适配层可发送结构化消息", async () => {
   const bodies: unknown[] = [];
   const server = createServer(async (req, res) => {

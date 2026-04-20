@@ -1,8 +1,10 @@
 import type {
   AcceptanceEvaluationInput,
   ApiCheckEvidence,
+  PlaywrightEvidence,
   TestCommandEvidence,
 } from "../domain/acceptance.js";
+import type { PlaywrightArtifact, PlaywrightRunSummary } from "../domain/external.js";
 import type { ExecutionResult } from "../domain/execution.js";
 import type { TaskUnit } from "../domain/task-unit.js";
 
@@ -37,6 +39,7 @@ export function buildAcceptanceInputFromExecution(
   }
 
   const githubPrGate = buildGithubPrGate(notes);
+  const playwrightSummary = buildPlaywrightSummary(notes);
 
   return {
     testCommands:
@@ -44,6 +47,7 @@ export function buildAcceptanceInputFromExecution(
         ? buildParsedCommandEvidence(task, executionResult, parsed)
         : buildFallbackCommandEvidence(task, executionResult),
     apiChecks: githubPrGate ? [githubPrGate] : undefined,
+    playwright: playwrightSummary,
     buildLogs: executionResult.logs.map(
       (log) => `${log.level}: ${log.message}`,
     ),
@@ -167,4 +171,45 @@ function buildGithubPrGate(notes: string[]): ApiCheckEvidence | undefined {
       ? `等待 GitHub checks 通过，head=${branchName}`
       : "等待 GitHub checks 通过",
   };
+}
+
+function buildPlaywrightSummary(notes: string[]): PlaywrightRunSummary | undefined {
+  const summaryNote = notes.find((note) => note.startsWith("playwright:summary="));
+  if (!summaryNote) {
+    return undefined;
+  }
+
+  const payload = summaryNote.slice("playwright:summary=".length);
+  try {
+    const parsed = JSON.parse(payload) as PlaywrightRunSummary;
+    return {
+      ...parsed,
+      evidence: Array.isArray(parsed.evidence) ? parsed.evidence : [],
+      screenshots: sanitizeArtifacts(parsed.screenshots),
+      traces: sanitizeArtifacts(parsed.traces),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeArtifacts(artifacts: unknown): PlaywrightArtifact[] {
+  if (!Array.isArray(artifacts)) {
+    return [];
+  }
+
+  return artifacts.filter(isPlaywrightArtifact);
+}
+
+function isPlaywrightArtifact(value: unknown): value is PlaywrightArtifact {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.name === "string" &&
+    typeof candidate.contentType === "string" &&
+    typeof candidate.path === "string"
+  );
 }

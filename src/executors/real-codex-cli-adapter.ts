@@ -14,6 +14,7 @@ import {
   GithubPrPipeline,
   type GithubPrPipelineConfig,
 } from "../workers/github-pr-pipeline.js";
+import { PlaywrightAdapter } from "../integrations/playwright-adapter.js";
 import type { FailureClassification } from "../workflow/state-machine.js";
 import type { ExecutorAdapter } from "./adapter.js";
 
@@ -49,6 +50,7 @@ interface CommandResult {
 
 export class RealCodexCliAdapter implements ExecutorAdapter {
   readonly name = "codex" as const;
+  private readonly playwright = new PlaywrightAdapter();
 
   constructor(private readonly config: RealCodexCliAdapterConfig) {}
 
@@ -102,14 +104,47 @@ export class RealCodexCliAdapter implements ExecutorAdapter {
         if (!command?.trim()) {
           continue;
         }
-        const result = await runCommand(
-          command,
-          commandCwd,
-          context.signal,
-          undefined,
-          label,
-        );
-        appendCommandResult(label, result, stdout, stderr, logs);
+        const runtimeCommand =
+          label === "e2e"
+            ? this.playwright.prepareExecutionCommand(
+                command,
+                codexResult.artifactDir,
+              )
+            : undefined;
+
+        try {
+          const result = await runCommand(
+            runtimeCommand?.command ?? command,
+            commandCwd,
+            context.signal,
+            undefined,
+            label,
+          );
+          appendCommandResult(label, result, stdout, stderr, logs);
+
+          if (label === "e2e") {
+            await appendPlaywrightResult(
+              this.playwright,
+              commandCwd,
+              codexResult.artifactDir,
+              runtimeCommand?.reportFile,
+              stdout,
+              logs,
+            );
+          }
+        } catch (error) {
+          if (label === "e2e") {
+            await appendPlaywrightResult(
+              this.playwright,
+              commandCwd,
+              codexResult.artifactDir,
+              runtimeCommand?.reportFile,
+              stdout,
+              logs,
+            );
+          }
+          throw error;
+        }
       }
 
       const gitStatus = await runCommand(
@@ -397,6 +432,37 @@ function renderAppErrorDetails(error: AppError): string[] {
   return error.details
     ? [`details=${JSON.stringify(error.details)}`]
     : [];
+}
+
+async function appendPlaywrightResult(
+  adapter: PlaywrightAdapter,
+  commandCwd: string,
+  artifactDir: string,
+  reportFile: string | undefined,
+  stdout: string[],
+  logs: ExecutionLogEntry[],
+): Promise<void> {
+  const collected = await adapter.collectFromRuntime(
+    commandCwd,
+    artifactDir,
+    reportFile,
+  );
+  if (!collected) {
+    return;
+  }
+
+  logs.push(
+    logEntry(
+      "info",
+      `playwright 报告已收集：${collected.reportPath}`,
+    ),
+  );
+  stdout.push(
+    ...prefixLines("[playwright:stdout] ", [
+      `report=${collected.reportPath}`,
+      `summary=${JSON.stringify(collected.summary)}`,
+    ]),
+  );
 }
 
 function classifyAppError(error: AppError): FailureClassification {

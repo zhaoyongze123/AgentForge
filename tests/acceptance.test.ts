@@ -220,3 +220,63 @@ test("GitHub PR 已创建但 checks 未回流时验收会保持 blocked", () => 
     true,
   );
 });
+
+test("执行结果中的 Playwright summary 会被转换成结构化验收证据", () => {
+  const summary = {
+    status: "failed" as const,
+    total: 1,
+    passed: 0,
+    failed: 1,
+    skipped: 0,
+    durationMs: 321,
+    evidence: ["locator timeout"],
+    screenshots: [
+      {
+        name: "error",
+        contentType: "image/png",
+        path: "/tmp/artifacts/error.png",
+      },
+    ],
+    traces: [
+      {
+        name: "trace",
+        contentType: "application/zip",
+        path: "/tmp/artifacts/trace.zip",
+      },
+    ],
+  };
+  const task = createTask({
+    type: "acceptance",
+    acceptanceCriteria: ["浏览器页面验收通过"],
+  });
+
+  const input = buildAcceptanceInputFromExecution(task, {
+    executor: "codex",
+    status: "failed",
+    stdout: [
+      `[playwright:stdout] summary=${JSON.stringify(summary)}`,
+    ],
+    stderr: ["[e2e:stderr] playwright failed"],
+    logs: [],
+    exitCode: 1,
+    durationMs: 700,
+    evidence: [],
+    failureClassification: "blocked",
+    reason: "blocked",
+  });
+  const result = new Evaluator().evaluate(task, input);
+
+  assert.equal(input.playwright?.failed, 1);
+  assert.equal(input.playwright?.screenshots[0]?.path, "/tmp/artifacts/error.png");
+  assert.equal(input.playwright?.traces[0]?.path, "/tmp/artifacts/trace.zip");
+  assert.equal(result.status, "failed");
+  assert.equal(result.rootCause, "locator timeout");
+  assert.equal(
+    result.evidence.some((line) => line.includes("screenshot:/tmp/artifacts/error.png")),
+    true,
+  );
+  assert.equal(
+    result.evidence.some((line) => line.includes("trace:/tmp/artifacts/trace.zip")),
+    true,
+  );
+});

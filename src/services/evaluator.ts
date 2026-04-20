@@ -249,14 +249,17 @@ export class Evaluator {
     }
 
     for (const evidence of report.evidence) {
+      if (evidence.kind === "playwright" && evidence.status !== "passed") {
+        return evidence.summary.evidence[0] ?? "Playwright 验收失败";
+      }
+    }
+
+    for (const evidence of report.evidence) {
       if (evidence.kind === "test_command" && evidence.status !== "passed") {
         return evidence.stderr[0] ?? evidence.stdout[0] ?? "测试命令失败";
       }
       if (evidence.kind === "api_check" && evidence.status !== "passed") {
         return evidence.responseSummary ?? "API 检查失败";
-      }
-      if (evidence.kind === "playwright" && evidence.status !== "passed") {
-        return evidence.summary.evidence[0] ?? "Playwright 验收失败";
       }
     }
 

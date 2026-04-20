@@ -18,9 +18,9 @@
 
 | 状态        | 数量 |
 | ----------- | ---: |
-| done        |  171 |
+| done        |  172 |
 | in_progress |    0 |
-| pending     |   12 |
+| pending     |   11 |
 | blocked     |    0 |
 
 ## Phase 1：项目基线与工程治理
@@ -325,7 +325,7 @@
 | T169 | done    | worker-write-set-diff-guard          | T168                |
 | T170 | done    | github-branch-pr-pipeline            | T168                |
 | T171 | done    | github-checks-gate-webhook           | T170                |
-| T172 | pending | playwright-real-execution-runtime    | T168                |
+| T172 | done    | playwright-real-execution-runtime    | T168                |
 | T173 | pending | acceptance-real-evidence-gate        | T169,T172           |
 | T174 | pending | knowledge-mem0-http-primary-path     | T165                |
 | T175 | pending | knowledge-fail-closed-obsidian-sync  | T174                |
@@ -958,8 +958,18 @@ knowledgePolicy:
   reusableScoreThreshold: 0.7
   stabilityScoreThreshold: 0.75
   confidenceThreshold: 0.8
-status: PLANNED
+status: DONE
 ```
+
+已完成证据：
+
+- `src/integrations/playwright-adapter.ts` 已新增真实运行时支持：可为 `e2eCommand` 注入 `PLAYWRIGHT_JSON_OUTPUT_FILE` 与 `--reporter=json`，并从 artifact 目录或标准候选路径收集 JSON 报告。
+- `src/executors/real-codex-cli-adapter.ts` 已把 Playwright runtime 接到真实 `e2eCommand` 路径；无论 e2e 成功还是失败，都会尝试收集 Playwright 报告，并把 `report` 与结构化 `summary` 回流到执行输出。
+- `src/services/execution-acceptance-input.ts` 已支持从执行输出解析 `playwright:summary`，组装为 `AcceptanceEvaluationInput.playwright`，从而把截图、trace、失败 evidence 传给 Evaluator。
+- `src/services/evaluator.ts` 已优先使用 Playwright 结构化 evidence 作为失败根因，避免只拿到粗粒度 `e2e stderr`。
+- `tests/acceptance.test.ts` 已新增回归：执行输出中的 Playwright summary 可被转换成结构化验收证据，截图/trace 路径进入 evidence，根因优先取 `locator timeout`。
+- `tests/external-integrations.test.ts` 已新增回归：Playwright runtime 适配层可注入 JSON reporter，并从 artifact 目录收集报告。
+- 回归结果：`npm run typecheck` 通过；`npm test` 通过，`106 passed / 0 failed / 1 skipped`。
 
 #### T173 `acceptance-real-evidence-gate`
 

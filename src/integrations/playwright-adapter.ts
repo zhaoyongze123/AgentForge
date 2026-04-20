@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import path from "node:path";
 
 import { AppError } from "../core/errors/app-error.js";
 import type {
@@ -32,7 +33,35 @@ interface PlaywrightJsonResult {
   error?: { message?: string };
 }
 
+export interface PlaywrightPreparedCommand {
+  command: string;
+  reportFile: string;
+}
+
+export interface PlaywrightCollectedRun {
+  reportPath: string;
+  summary: PlaywrightRunSummary;
+}
+
 export class PlaywrightAdapter {
+  prepareExecutionCommand(
+    command: string,
+    artifactDir: string,
+  ): PlaywrightPreparedCommand {
+    const reportFile = path.join(artifactDir, "playwright-report.json");
+    const htmlOutputDir = path.join(artifactDir, "playwright-report");
+    const commandWithReporter = injectJsonReporter(command);
+
+    return {
+      reportFile,
+      command: [
+        `PLAYWRIGHT_JSON_OUTPUT_FILE=${quoteForShell(reportFile)}`,
+        `PLAYWRIGHT_HTML_OUTPUT_DIR=${quoteForShell(htmlOutputDir)}`,
+        commandWithReporter,
+      ].join(" "),
+    };
+  }
+
   async collectFromJsonReport(reportPath: string): Promise<PlaywrightRunSummary> {
     let raw: string;
     try {
@@ -106,6 +135,33 @@ export class PlaywrightAdapter {
       traces: buckets.traces,
     };
   }
+
+  async collectFromRuntime(
+    commandCwd: string,
+    artifactDir: string,
+    reportFile?: string,
+  ): Promise<PlaywrightCollectedRun | undefined> {
+    const candidates = uniquePaths([
+      reportFile,
+      path.join(artifactDir, "playwright-report.json"),
+      path.join(commandCwd, "playwright-report.json"),
+      path.join(commandCwd, "test-results.json"),
+      path.join(commandCwd, "playwright-report", "results.json"),
+    ]);
+
+    for (const candidate of candidates) {
+      if (!(await pathExists(candidate))) {
+        continue;
+      }
+
+      return {
+        reportPath: candidate,
+        summary: await this.collectFromJsonReport(candidate),
+      };
+    }
+
+    return undefined;
+  }
 }
 
 function walkSpecs(
@@ -120,5 +176,38 @@ function walkSpecs(
 
   for (const suite of spec.suites ?? []) {
     walkSpecs(suite, onResult);
+  }
+}
+
+function injectJsonReporter(command: string): string {
+  if (/\b--reporter(?:=|\s+)/iu.test(command)) {
+    return command;
+  }
+
+  if (/^\s*(npm|pnpm|yarn|bun)\b.*\b(e2e|playwright)\b/iu.test(command)) {
+    return `${command} -- --reporter=json`;
+  }
+
+  if (/\bplaywright\b/iu.test(command)) {
+    return `${command} --reporter=json`;
+  }
+
+  return command;
+}
+
+function quoteForShell(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+
+function uniquePaths(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await access(targetPath);
+    return true;
+  } catch {
+    return false;
   }
 }
