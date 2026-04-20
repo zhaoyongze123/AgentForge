@@ -1,5 +1,6 @@
 import type {
   AcceptanceEvaluationInput,
+  ApiCheckEvidence,
   TestCommandEvidence,
 } from "../domain/acceptance.js";
 import type { ExecutionResult } from "../domain/execution.js";
@@ -35,11 +36,14 @@ export function buildAcceptanceInputFromExecution(
     collectPrefixedLine(line, "stderr", parsed, notes);
   }
 
+  const githubPrGate = buildGithubPrGate(notes);
+
   return {
     testCommands:
       parsed.size > 0
         ? buildParsedCommandEvidence(task, executionResult, parsed)
         : buildFallbackCommandEvidence(task, executionResult),
+    apiChecks: githubPrGate ? [githubPrGate] : undefined,
     buildLogs: executionResult.logs.map(
       (log) => `${log.level}: ${log.message}`,
     ),
@@ -135,4 +139,32 @@ function inferExecutionMode(
   )
     ? "real"
     : "simulated";
+}
+
+function buildGithubPrGate(notes: string[]): ApiCheckEvidence | undefined {
+  const metadata = new Map<string, string>();
+  for (const note of notes) {
+    const match = note.match(/^github-pr:(?<key>[^=]+)=(?<value>.+)$/u);
+    if (!match?.groups) {
+      continue;
+    }
+    metadata.set(match.groups.key, match.groups.value);
+  }
+
+  const pullRequestUrl = metadata.get("pull_request");
+  if (!pullRequestUrl) {
+    return undefined;
+  }
+
+  const branchName = metadata.get("head");
+  return {
+    kind: "api_check",
+    name: "GitHub PR Checks",
+    method: "GITHUB",
+    endpoint: pullRequestUrl,
+    status: "blocked",
+    responseSummary: branchName
+      ? `等待 GitHub checks 通过，head=${branchName}`
+      : "等待 GitHub checks 通过",
+  };
 }

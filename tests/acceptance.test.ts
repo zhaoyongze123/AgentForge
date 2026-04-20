@@ -185,3 +185,38 @@ test("执行结果会被转换成 Evaluator 可消费的真实命令证据", () 
   assert.equal(input.testCommands?.length, 3);
   assert.equal(input.notes?.includes("execution_mode=real"), true);
 });
+
+test("GitHub PR 已创建但 checks 未回流时验收会保持 blocked", () => {
+  const evaluator = new Evaluator();
+  const task = createTask({
+    acceptanceCriteria: ["PR checks 未绿时任务不能 passed"],
+  });
+
+  const input = buildAcceptanceInputFromExecution(task, {
+    executor: "codex",
+    status: "succeeded",
+    stdout: [
+      "[test:stdout] tests passed",
+      "[github-pr:stdout] pull_request=https://github.com/tester/agentforge/pull/12",
+      "[github-pr:stdout] head=task/plan-1/backend-user-register",
+    ],
+    stderr: [],
+    logs: [],
+    exitCode: 0,
+    durationMs: 900,
+    evidence: [],
+  });
+  const result = evaluator.evaluate(task, input);
+
+  assert.equal(result.status, "blocked");
+  assert.equal(
+    result.acceptanceChecks.some((check) =>
+      check.includes("GitHub PR Checks: blocked"),
+    ),
+    true,
+  );
+  assert.equal(
+    result.evidence.some((line) => line.includes("API GITHUB https://github.com/tester/agentforge/pull/12 => blocked")),
+    true,
+  );
+});

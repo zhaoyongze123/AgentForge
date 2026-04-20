@@ -4,12 +4,14 @@ import {
   type AppEnv,
 } from "../core/config/env.js";
 import type { FeishuCardAction } from "../integrations/feishu-callback.js";
+import type { GithubWebhookEvent } from "../integrations/github-webhook.js";
 import type { HumanIntervention } from "../domain/incident.js";
 import type { KnowledgeRecord } from "../domain/knowledge.js";
 import type { EventLogRecord } from "../domain/persistence.js";
 import type { Assignment } from "../domain/plan.js";
 import type { AuditQuery, AuditSnapshot, MetricsSnapshot } from "../domain/observability.js";
 import type { PlanInput, TaskUnit } from "../domain/task-unit.js";
+import { GithubAdapter } from "../integrations/github-adapter.js";
 import { FileDatabase } from "../persistence/file-database.js";
 import {
   AcceptanceRunRepository,
@@ -21,6 +23,7 @@ import {
   TaskRepository,
 } from "../persistence/repositories.js";
 import { executeWorkflowRun } from "../orchestration/runtime.js";
+import { Evaluator } from "../services/evaluator.js";
 import { ObservabilityService } from "../services/observability-service.js";
 import { Planner } from "../services/planner.js";
 import { BusinessTaskStateMachine } from "../workflow/state-machine.js";
@@ -51,6 +54,7 @@ interface HumanGateActionInput {
 
 export class ControlPlaneService {
   private readonly planner = new Planner();
+  private readonly evaluator = new Evaluator();
   private readonly taskStateMachine = new BusinessTaskStateMachine();
   private readonly observabilityService = new ObservabilityService();
   private readonly context: PersistenceContext;
@@ -492,6 +496,120 @@ export class ControlPlaneService {
     return task;
   }
 
+  async processGithubWebhook(event: GithubWebhookEvent): Promise<{
+    taskUpdated: boolean;
+    taskId?: string;
+    planId?: string;
+    acceptanceStatus?: "passed" | "failed" | "blocked";
+    checkStatus?: "passed" | "failed" | "blocked";
+    pullNumber?: number;
+  }> {
+    const task = await this.resolveTaskForGithubWebhook(event);
+    const logTarget = task
+      ? {
+          entityType: "task" as const,
+          entityId: task.taskId,
+        }
+      : {
+          entityType: "plan" as const,
+          entityId: inferPlanIdFromBranch(event.branchName) ?? event.deliveryId,
+        };
+
+    const aggregate = event.pullNumber
+      ? await this.collectGithubCheckAggregate(event)
+      : {
+          status: "blocked" as const,
+          summary: "Webhook 未提供 pull request 编号，无法聚合 GitHub checks。",
+          checks: [],
+        };
+
+    await this.eventLogRepository.append({
+      eventId: `evt-github-checks-${event.deliveryId}`,
+      entityType: logTarget.entityType,
+      entityId: logTarget.entityId,
+      eventType: task
+        ? "github.checks.received"
+        : "github.checks.unmatched",
+      payload: {
+        deliveryId: event.deliveryId,
+        event: event.event,
+        action: event.action,
+        repository: event.repository,
+        branchName: event.branchName,
+        pullNumber: event.pullNumber,
+        checkName: event.checkName,
+        status: event.status,
+        conclusion: event.conclusion,
+        detailsUrl: event.detailsUrl,
+        aggregate,
+        raw: event.raw,
+      },
+      createdAt: new Date().toISOString(),
+    });
+
+    if (!task) {
+      return {
+        taskUpdated: false,
+        planId: inferPlanIdFromBranch(event.branchName),
+        pullNumber: event.pullNumber,
+        checkStatus: aggregate.status,
+      };
+    }
+
+    const acceptance = this.evaluator.evaluate(task, {
+      apiChecks: [
+        {
+          kind: "api_check",
+          name: "GitHub PR Checks",
+          method: "GITHUB",
+          endpoint: buildGithubPullEndpoint(event),
+          status: aggregate.status,
+          responseSummary: aggregate.summary,
+        },
+      ],
+      notes: [
+        `github_delivery_id=${event.deliveryId}`,
+        `github_event=${event.event}`,
+        `github_action=${event.action ?? ""}`,
+        `github_branch=${event.branchName ?? ""}`,
+      ],
+    });
+    await this.acceptanceRunRepository.save(task.taskId, acceptance);
+
+    const nextStatus = mapAcceptanceStatusToTaskStatus(acceptance.status);
+    const previousStatus = task.status ?? "PLANNED";
+    const taskUpdated = previousStatus !== nextStatus;
+    task.status = nextStatus;
+    await this.taskRepository.save(task);
+
+    await this.eventLogRepository.append({
+      eventId: `evt-github-checks-applied-${event.deliveryId}`,
+      entityType: "task",
+      entityId: task.taskId,
+      eventType: "task.github_checks_updated",
+      payload: {
+        planId: task.planId,
+        taskId: task.taskId,
+        pullNumber: event.pullNumber,
+        fromStatus: previousStatus,
+        toStatus: nextStatus,
+        acceptanceStatus: acceptance.status,
+        checkStatus: aggregate.status,
+        summary: aggregate.summary,
+      },
+      createdAt: new Date().toISOString(),
+    });
+
+    return {
+      taskUpdated,
+      taskId: task.taskId,
+      planId: task.planId,
+      acceptanceStatus: acceptance.status,
+      checkStatus: aggregate.status,
+      pullNumber: event.pullNumber,
+    };
+  }
+
   private async resolveTaskForCardAction(
     action: FeishuCardAction,
   ): Promise<TaskUnit | undefined> {
@@ -514,6 +632,86 @@ export class ControlPlaneService {
     }
 
     return undefined;
+  }
+
+  private async resolveTaskForGithubWebhook(
+    event: GithubWebhookEvent,
+  ): Promise<TaskUnit | undefined> {
+    const binding = parseTaskBindingFromBranch(event.branchName);
+    if (!binding) {
+      return undefined;
+    }
+
+    return (await this.taskRepository.list()).find(
+      (item) =>
+        item.planId === binding.planId && item.taskId === binding.taskId,
+    );
+  }
+
+  private async collectGithubCheckAggregate(event: GithubWebhookEvent): Promise<{
+    status: "passed" | "failed" | "blocked";
+    summary: string;
+    checks: string[];
+  }> {
+    if (!this.env.githubToken || !event.pullNumber) {
+      return {
+        status: "blocked",
+        summary: "缺少 GitHub Token 或 pull request 编号，无法聚合 checks。",
+        checks: [],
+      };
+    }
+
+    const github = new GithubAdapter({
+      token: this.env.githubToken,
+      baseUrl: this.env.githubApiBaseUrl,
+    });
+    const checks = await github.getPullRequestChecks({
+      owner: event.repository.owner,
+      repo: event.repository.repo,
+      pullNumber: event.pullNumber,
+    });
+    const renderedChecks = checks.map((check) =>
+      `${check.name}:${check.status}:${check.conclusion ?? "null"}`,
+    );
+
+    if (checks.length === 0) {
+      return {
+        status: "blocked",
+        summary: "GitHub 未返回任何 checks，保持等待。",
+        checks: renderedChecks,
+      };
+    }
+
+    if (
+      checks.some(
+        (check) =>
+          check.status !== "completed" || check.conclusion === null,
+      )
+    ) {
+      return {
+        status: "blocked",
+        summary: `GitHub checks 仍在执行：${renderedChecks.join(" | ")}`,
+        checks: renderedChecks,
+      };
+    }
+
+    if (
+      checks.some((check) =>
+        ["failure", "cancelled"].includes(check.conclusion ?? ""),
+      )
+    ) {
+      return {
+        status: "failed",
+        summary: `GitHub checks 失败：${renderedChecks.join(" | ")}`,
+        checks: renderedChecks,
+      };
+    }
+
+    return {
+      status: "passed",
+      summary: `GitHub checks 全部通过：${renderedChecks.join(" | ")}`,
+      checks: renderedChecks,
+    };
   }
 
   private pickLatestTaskCandidate(tasks: TaskUnit[]): TaskUnit | undefined {
@@ -592,4 +790,48 @@ function toEventPayload(action: FeishuCardAction): Record<string, unknown> {
     actor: action.actor,
     summary: action.summary,
   };
+}
+
+function parseTaskBindingFromBranch(
+  branchName?: string,
+): { planId: string; taskId: string } | undefined {
+  if (!branchName) {
+    return undefined;
+  }
+
+  const match = branchName.match(/^task\/(?<planId>[^/]+)\/(?<taskId>[^/]+)$/u);
+  if (!match?.groups?.planId || !match.groups.taskId) {
+    return undefined;
+  }
+
+  return {
+    planId: match.groups.planId,
+    taskId: match.groups.taskId,
+  };
+}
+
+function inferPlanIdFromBranch(branchName?: string): string | undefined {
+  return parseTaskBindingFromBranch(branchName)?.planId;
+}
+
+function buildGithubPullEndpoint(event: GithubWebhookEvent): string {
+  if (event.pullNumber) {
+    return `/${event.repository.owner}/${event.repository.repo}/pulls/${event.pullNumber}`;
+  }
+
+  return `/${event.repository.owner}/${event.repository.repo}/checks`;
+}
+
+function mapAcceptanceStatusToTaskStatus(
+  status: "passed" | "failed" | "blocked",
+): TaskUnit["status"] {
+  if (status === "passed") {
+    return "DONE";
+  }
+
+  if (status === "failed") {
+    return "FAILED_BLOCKED";
+  }
+
+  return "AWAITING_ACCEPTANCE";
 }

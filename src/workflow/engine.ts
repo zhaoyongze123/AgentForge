@@ -34,6 +34,7 @@ export interface WorkflowEngineOptions
     | "executorTimeoutMs"
     | "targetProjectRoot"
     | "githubToken"
+    | "githubApiBaseUrl"
     | "codexCliCommand"
     | "installCommand"
     | "typecheckCommand"
@@ -118,6 +119,7 @@ export class WorkflowEngine {
                 githubDelivery: env.githubToken
                   ? {
                       token: env.githubToken,
+                      baseUrl: env.githubApiBaseUrl,
                     }
                   : undefined,
               }
@@ -191,6 +193,7 @@ export class WorkflowEngine {
           buildAcceptanceInputFromExecution(task, executionResult),
         );
         this.store.acceptanceResults.set(task.taskId, acceptance);
+        task.status = mapAcceptanceStatusToTaskStatus(acceptance.status);
         this.store.assignments.set(
           runningAssignment.assignmentId,
           this.dispatcher.markAssignmentFinished(
@@ -245,4 +248,18 @@ export class WorkflowEngine {
       }
     }
   }
+}
+
+function mapAcceptanceStatusToTaskStatus(
+  status: AcceptanceResult["status"],
+): TaskUnit["status"] {
+  if (status === "passed") {
+    return "DONE";
+  }
+
+  if (status === "failed") {
+    return "FAILED_BLOCKED";
+  }
+
+  return "AWAITING_ACCEPTANCE";
 }

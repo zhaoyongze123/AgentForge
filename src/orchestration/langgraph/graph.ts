@@ -60,6 +60,7 @@ export interface LangGraphRuntimeEnv
     | "executorTimeoutMs"
     | "targetProjectRoot"
     | "githubToken"
+    | "githubApiBaseUrl"
     | "codexCliCommand"
     | "installCommand"
     | "typecheckCommand"
@@ -113,6 +114,7 @@ export function createLangGraphNodeContext(
               githubDelivery: env.githubToken
                 ? {
                     token: env.githubToken,
+                    baseUrl: env.githubApiBaseUrl,
                   }
                 : undefined,
             }
@@ -236,8 +238,12 @@ export function createLangGraph(context: LangGraphNodeContext) {
         ...result.evidence,
         "LangGraph 节点 evaluate 已完成验收记录",
       ];
+      task.status = mapAcceptanceStatusToTaskStatus(result.status);
 
       return {
+        tasks: cloneTasks(state.tasks).map((item) =>
+          item.taskId === task.taskId ? { ...task } : item,
+        ),
         acceptanceResults: upsertAcceptanceResult(state.acceptanceResults, {
           taskId: task.taskId,
           result,
@@ -288,6 +294,20 @@ export function createLangGraph(context: LangGraphNodeContext) {
     .addEdge(LANGGRAPH_NODE_NAMES.evaluate, LANGGRAPH_NODE_NAMES.dispatch)
     .addEdge(LANGGRAPH_NODE_NAMES.knowledge, END)
     .compile();
+}
+
+function mapAcceptanceStatusToTaskStatus(
+  status: AcceptanceRunSnapshot["result"]["status"],
+): TaskUnit["status"] {
+  if (status === "passed") {
+    return "DONE";
+  }
+
+  if (status === "failed") {
+    return "FAILED_BLOCKED";
+  }
+
+  return "AWAITING_ACCEPTANCE";
 }
 
 export async function runLangGraphPlan(

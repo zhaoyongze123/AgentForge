@@ -18,9 +18,9 @@
 
 | 状态        | 数量 |
 | ----------- | ---: |
-| done        |  170 |
+| done        |  171 |
 | in_progress |    0 |
-| pending     |   13 |
+| pending     |   12 |
 | blocked     |    0 |
 
 ## Phase 1：项目基线与工程治理
@@ -324,7 +324,7 @@
 | T168 | done    | worker-real-codex-launcher           | T166,T167           |
 | T169 | done    | worker-write-set-diff-guard          | T168                |
 | T170 | done    | github-branch-pr-pipeline            | T168                |
-| T171 | pending | github-checks-gate-webhook           | T170                |
+| T171 | done    | github-checks-gate-webhook           | T170                |
 | T172 | pending | playwright-real-execution-runtime    | T168                |
 | T173 | pending | acceptance-real-evidence-gate        | T169,T172           |
 | T174 | pending | knowledge-mem0-http-primary-path     | T165                |
@@ -892,8 +892,19 @@ knowledgePolicy:
   reusableScoreThreshold: 0.7
   stabilityScoreThreshold: 0.75
   confidenceThreshold: 0.8
-status: PLANNED
+status: DONE
 ```
+
+已完成证据：
+
+- `src/integrations/github-webhook.ts` 已新增 GitHub webhook 处理器，支持 `x-hub-signature-256` HMAC 校验，并提取 `check_run/check_suite` 的分支、PR 编号、状态与摘要。
+- `src/api/http-server.ts` 已新增 `POST /github/webhooks` 与 `POST /api/github/webhooks` 入口；`src/api/control-plane-service.ts` 已实现 checks 聚合逻辑：收到 webhook 后调用 `GithubAdapter.getPullRequestChecks()` 汇总真实 PR checks，把原始 payload 与聚合摘要写入 event log，并回写 acceptance run。
+- `src/services/execution-acceptance-input.ts` 已新增 GitHub PR gate：真实执行出现 `[github-pr:stdout] pull_request=...` 后，未收到 checks 成功回流前，验收自动保持 `blocked`。
+- `src/workflow/engine.ts` 与 `src/orchestration/langgraph/graph.ts` 已把验收结果映射回任务状态：`passed -> DONE`，`failed -> FAILED_BLOCKED`，`blocked -> AWAITING_ACCEPTANCE`，从而支持“先等 checks，再由 webhook 放行”。
+- `tests/acceptance.test.ts` 已新增回归：PR 已创建但 checks 未回流时，验收结果为 `blocked`。
+- `tests/external-integrations.test.ts` 已新增回归：GitHub webhook 处理器可真实校验签名并抽取 checks 摘要。
+- `tests/api.test.ts` 已新增端到端回归：本地 webhook 请求触发真实 checks 聚合、acceptance run 写入、task 状态从 `AWAITING_ACCEPTANCE` 推进到 `DONE`，并在事件日志中保留 `github.checks.received` 的聚合摘要。
+- 回归结果：`npm run typecheck` 通过；`npm test` 通过，`104 passed / 0 failed / 1 skipped`。
 
 #### T172 `playwright-real-execution-runtime`
 

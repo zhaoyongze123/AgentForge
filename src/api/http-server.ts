@@ -16,11 +16,13 @@ import {
 } from "../core/security/auth.js";
 import { redactJsonString } from "../core/security/redaction.js";
 import { FeishuCallbackHandler } from "../integrations/feishu-callback.js";
+import { GithubWebhookHandler } from "../integrations/github-webhook.js";
 import { ControlPlaneService } from "./control-plane-service.js";
 
 export function createHttpApp(env: AppEnv) {
   const service = new ControlPlaneService(env);
   const feishuCallbackHandler = new FeishuCallbackHandler(env);
+  const githubWebhookHandler = new GithubWebhookHandler(env);
 
   return createServer(async (request, response) => {
     try {
@@ -88,6 +90,26 @@ export function createHttpApp(env: AppEnv) {
         }
 
         return json(response, result.statusCode, result.body);
+      }
+
+      if (
+        method === "POST" &&
+        (pathname === "/github/webhooks" || pathname === "/api/github/webhooks")
+      ) {
+        const rawBody = await readText(request);
+        console.log(
+          JSON.stringify({
+            level: "info",
+            message: "收到 GitHub webhook",
+            pathname,
+            bytes: Buffer.byteLength(rawBody),
+            body: redactJsonString(rawBody.slice(0, 4000)),
+            timestamp: new Date().toISOString(),
+          }),
+        );
+        const event = githubWebhookHandler.handle(rawBody, request.headers);
+        const result = await service.processGithubWebhook(event);
+        return json(response, 200, result);
       }
 
       if (

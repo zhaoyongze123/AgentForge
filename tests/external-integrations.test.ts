@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -6,11 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import type { AppEnv } from "../src/core/config/env.js";
 import type { HumanIntervention, Incident } from "../src/domain/incident.js";
 import type { KnowledgeRecord } from "../src/domain/knowledge.js";
 import type { TaskUnit } from "../src/domain/task-unit.js";
 import { FeishuAdapter } from "../src/integrations/feishu-adapter.js";
 import { GithubAdapter } from "../src/integrations/github-adapter.js";
+import { GithubWebhookHandler } from "../src/integrations/github-webhook.js";
 import { Mem0HttpAdapter } from "../src/integrations/mem0-http-adapter.js";
 import { ObsidianSyncService } from "../src/integrations/obsidian-sync.js";
 import { PlaywrightAdapter } from "../src/integrations/playwright-adapter.js";
@@ -318,6 +321,54 @@ test("GitHub PR pipeline 可真实完成 commit、push 与 PR 创建", async () 
       server.close((error) => (error ? reject(error) : resolve())),
     );
   }
+});
+
+test("GitHub webhook 处理器可校验签名并提取 checks 摘要", () => {
+  const env: AppEnv = {
+    nodeEnv: "test",
+    workflowExecutor: "in_memory",
+    strictMode: false,
+    allowSimulation: true,
+    requireRealExternals: false,
+    projectAllowlist: [],
+    githubToken: "github-token",
+    githubWebhookSecret: "webhook-secret",
+    obsidianEnabled: false,
+    databaseUrl: ".agentforge/test-db.json",
+    temporalAddress: "127.0.0.1:7233",
+    temporalNamespace: "default",
+    temporalTaskQueue: "agentforge-control-plane",
+  };
+  const payload = JSON.stringify({
+    action: "completed",
+    repository: {
+      owner: { login: "tester" },
+      name: "agentforge",
+    },
+    check_run: {
+      name: "ci",
+      status: "completed",
+      conclusion: "success",
+      head_branch: "task/plan-1/backend-user-register",
+      details_url: "https://ci.example/run/1",
+      pull_requests: [{ number: 12 }],
+    },
+  });
+  const signature = `sha256=${createHmac("sha256", "webhook-secret")
+    .update(payload)
+    .digest("hex")}`;
+
+  const result = new GithubWebhookHandler(env).handle(payload, {
+    "x-github-event": "check_run",
+    "x-github-delivery": "delivery-1",
+    "x-hub-signature-256": signature,
+  });
+
+  assert.equal(result.event, "check_run");
+  assert.equal(result.pullNumber, 12);
+  assert.equal(result.branchName, "task/plan-1/backend-user-register");
+  assert.equal(result.repository.owner, "tester");
+  assert.equal(result.checkName, "ci");
 });
 
 test("Playwright 结果采集适配层可解析截图、trace 与失败证据", async () => {

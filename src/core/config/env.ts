@@ -11,6 +11,8 @@ export interface AppEnv {
   humanGateApiKey?: string;
   projectAllowlist: string[];
   githubToken?: string;
+  githubApiBaseUrl?: string;
+  githubWebhookSecret?: string;
   feishuAppId?: string;
   feishuAppSecret?: string;
   feishuVerificationToken?: string;
@@ -124,6 +126,8 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
     humanGateApiKey: source.HUMAN_GATE_API_KEY,
     projectAllowlist: parseProjectAllowlist(source.PROJECT_ALLOWLIST),
     githubToken: source.GITHUB_TOKEN,
+    githubApiBaseUrl: source.GITHUB_API_BASE_URL,
+    githubWebhookSecret: source.GITHUB_WEBHOOK_SECRET,
     feishuAppId: source.FEISHU_APP_ID,
     feishuAppSecret: source.FEISHU_APP_SECRET,
     feishuVerificationToken: source.FEISHU_VERIFICATION_TOKEN,
