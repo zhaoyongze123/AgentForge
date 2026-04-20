@@ -1,0 +1,64 @@
+name: agentforge-dev
+
+services:
+  agentforge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentforge-dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: 3000
+      WORKFLOW_EXECUTOR: ${WORKFLOW_EXECUTOR:-in_memory}
+      DATABASE_URL: /app/.agentforge/db.json
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: agentforge-control-plane
+      OBSIDIAN_ENABLED: ${OBSIDIAN_ENABLED:-false}
+      OBSIDIAN_ROOT: ${OBSIDIAN_ROOT:-}
+      CONTROL_PLANE_API_KEY: ${CONTROL_PLANE_API_KEY:-}
+      HUMAN_GATE_API_KEY: ${HUMAN_GATE_API_KEY:-}
+      PROJECT_ALLOWLIST: ${PROJECT_ALLOWLIST:-}
+      FEISHU_APP_ID: ${FEISHU_APP_ID:-}
+      FEISHU_APP_SECRET: ${FEISHU_APP_SECRET:-}
+      FEISHU_VERIFICATION_TOKEN: ${FEISHU_VERIFICATION_TOKEN:-}
+      FEISHU_ENCRYPT_KEY: ${FEISHU_ENCRYPT_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - ./.agentforge:/app/.agentforge
+    depends_on:
+      temporal:
+        condition: service_started
+
+  temporal:
+    image: temporalio/auto-setup:1.27.2
+    container_name: agentforge-temporal
+    restart: unless-stopped
+    environment:
+      DB: sqlite
+      DB_FILENAME: /etc/temporal/sqlite/temporal.db
+      ENABLE_ES: "false"
+    ports:
+      - "7233:7233"
+    volumes:
+      - temporal-data:/etc/temporal/sqlite
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    container_name: agentforge-temporal-ui
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8088:8080"
+    depends_on:
+      temporal:
+        condition: service_started
+
+volumes:
+  temporal-data:

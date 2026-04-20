@@ -1,0 +1,38 @@
+task_id: backend-example-task
+title: 补齐示例接口校验与回归测试
+goal: 让示例接口在非法输入下返回稳定错误并补齐测试
+type: backend
+phase: phase-1
+priority: high
+dependencies: []
+read_set:
+  - src/api/**
+write_set:
+  - src/api/**
+  - tests/**
+inputs:
+  - 接口契约
+  - 当前失败用例
+deliverables:
+  - 代码修改
+  - 回归测试
+acceptance_criteria:
+  - 非法输入返回稳定错误
+  - 对应测试通过
+test_commands:
+  - npm test
+handoff_to: acceptance-agent
+blocked_conditions:
+  - 需求歧义
+  - 需要改动越界模块
+auto_fix_policy:
+  - 编译错误可自动修
+  - 需求歧义不可自动修
+human_gate:
+  required: false
+knowledge_policy:
+  enabled: true
+  candidate_type: pattern
+  reusable_score_threshold: 0.70
+  stability_score_threshold: 0.75
+  confidence_threshold: 0.80
