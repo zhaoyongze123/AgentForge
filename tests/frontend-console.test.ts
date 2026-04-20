@@ -115,7 +115,7 @@ test("控制台数据接口支持任务详情、知识列表与人工 gate 动�
     const knowledge = (await knowledgeResponse.json()) as {
       records: Array<{ knowledgeId: string }>;
     };
-    assert.equal(knowledge.records.length >= 1, true);
+    assert.equal(knowledge.records.length, 0);
 
     const gateActionResponse = await fetch(`${baseUrl}/api/human-gates/actions`, {
       method: "POST",

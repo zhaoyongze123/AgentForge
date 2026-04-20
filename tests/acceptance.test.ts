@@ -186,6 +186,31 @@ test("执行结果会被转换成 Evaluator 可消费的真实命令证据", () 
   assert.equal(input.notes?.includes("execution_mode=real"), true);
 });
 
+test("模拟执行结果在缺少真实外部证据时会被阻塞", () => {
+  const evaluator = new Evaluator();
+  const task = createTask({
+    acceptanceCriteria: ["任务绑定测试命令通过"],
+    testCommands: ["npm test"],
+  });
+
+  const input = buildAcceptanceInputFromExecution(task, {
+    executor: "codex",
+    status: "succeeded",
+    stdout: ["tests passed"],
+    stderr: [],
+    logs: [],
+    exitCode: 0,
+    durationMs: 321,
+    evidence: [],
+  });
+  const result = evaluator.evaluate(task, input);
+
+  assert.equal(input.notes?.includes("execution_mode=simulated"), true);
+  assert.equal(result.status, "blocked");
+  assert.equal(result.rootCause.includes("缺少真实验收证据"), true);
+  assert.equal(result.rootCause.includes("当前仅有 simulated 证据"), true);
+});
+
 test("GitHub PR 已创建但 checks 未回流时验收会保持 blocked", () => {
   const evaluator = new Evaluator();
   const task = createTask({

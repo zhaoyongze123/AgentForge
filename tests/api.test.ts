@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { AppEnv } from "../src/core/config/env.js";
 import { createHttpApp } from "../src/api/http-server.js";
 
-test("HTTP 控制平面支持计划创建、任务图查询、运行状态、知识查询与人工 gate", async () => {
+test("HTTP 控制平面在 simulated 执行下会保留阻塞证据并拒绝发布知识", async () => {
   const root = await mkdtemp(join(tmpdir(), "agentforge-api-"));
   const env: AppEnv = {
     nodeEnv: "test",
@@ -70,8 +70,8 @@ test("HTTP 控制平面支持计划创建、任务图查询、运行状态、知
       assignmentCount: number;
       publishedKnowledgeCount: number;
     };
-    assert.equal(run.assignmentCount, 7);
-    assert.equal(run.publishedKnowledgeCount, 5);
+    assert.equal(run.assignmentCount, 1);
+    assert.equal(run.publishedKnowledgeCount, 0);
 
     const statusResponse = await fetch(
       `${baseUrl}/api/plans/${created.planId}/status`,
@@ -82,7 +82,7 @@ test("HTTP 控制平面支持计划创建、任务图查询、运行状态、知
       doneTaskCount: number;
     };
     assert.equal(status.runStatus, "completed");
-    assert.equal(status.doneTaskCount, 7);
+    assert.equal(status.doneTaskCount, 0);
 
     const knowledgeResponse = await fetch(
       `${baseUrl}/api/knowledge/${encodeURIComponent("knowledge.auth.flow")}`,
@@ -91,7 +91,7 @@ test("HTTP 控制平面支持计划创建、任务图查询、运行状态、知
     const knowledge = (await knowledgeResponse.json()) as {
       records: unknown[];
     };
-    assert.equal(knowledge.records.length, 1);
+    assert.equal(knowledge.records.length, 0);
 
     const gateResponse = await fetch(`${baseUrl}/api/human-gates`, {
       method: "POST",

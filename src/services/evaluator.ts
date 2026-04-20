@@ -199,9 +199,21 @@ export class Evaluator {
     checks: AcceptanceCheck[],
   ): string[] {
     const anomalies: string[] = [];
+    const hasTrustedEvidence = this.hasTrustedStructuredEvidence(evidence);
 
     if (checks.length === 1 && checks[0]?.checkId === "baseline-1") {
       anomalies.push(`任务 ${task.taskId} 缺少可执行验收检查项。`);
+    }
+
+    if (!hasTrustedEvidence) {
+      anomalies.push(`任务 ${task.taskId} 缺少真实验收证据。`);
+    }
+
+    if (
+      this.hasSimulatedExecutionEvidence(evidence) &&
+      !this.hasNonSimulatedExternalEvidence(evidence)
+    ) {
+      anomalies.push(`任务 ${task.taskId} 当前仅有 simulated 证据，不能判定 passed。`);
     }
 
     for (const item of evidence) {
@@ -457,6 +469,46 @@ export class Evaluator {
       (item) =>
         item.kind === "note" && item.message === "execution_mode=real",
     );
+  }
+
+  private hasSimulatedExecutionEvidence(
+    evidence: AcceptanceEvidence[],
+  ): boolean {
+    return evidence.some(
+      (item) =>
+        item.kind === "note" && item.message === "execution_mode=simulated",
+    );
+  }
+
+  private hasNonSimulatedExternalEvidence(
+    evidence: AcceptanceEvidence[],
+  ): boolean {
+    return evidence.some((item) =>
+      item.kind === "api_check" || item.kind === "playwright",
+    );
+  }
+
+  private hasTrustedStructuredEvidence(
+    evidence: AcceptanceEvidence[],
+  ): boolean {
+    if (evidence.some((item) => item.kind === "playwright")) {
+      return true;
+    }
+
+    if (evidence.some((item) => item.kind === "api_check")) {
+      return true;
+    }
+
+    if (
+      evidence.some((item) => item.kind === "test_command") &&
+      !this.hasSimulatedExecutionEvidence(evidence)
+    ) {
+      return true;
+    }
+
+    return this.hasSimulatedExecutionEvidence(evidence)
+      ? false
+      : evidence.some((item) => item.kind === "note" && item.message === "execution_mode=real");
   }
 
   private inferCriterionStatus(

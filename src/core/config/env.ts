@@ -38,6 +38,12 @@ export interface AppEnv {
   requireHumanOnTestFail?: boolean;
 }
 
+export interface Mem0PrimaryPathConfig {
+  mem0BaseUrl: string;
+  mem0ApiKey: string;
+  mem0UserId: string;
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
   const nodeEnv = parseNodeEnv(source.NODE_ENV);
   const workflowExecutor = parseWorkflowExecutor(source.WORKFLOW_EXECUTOR);
@@ -227,6 +233,35 @@ export function collectMissingRealExternalConfig(env: AppEnv): string[] {
   }
 
   return [...missing];
+}
+
+export function resolveMem0PrimaryPathConfig(
+  source: NodeJS.ProcessEnv = process.env,
+  overrides: Partial<Mem0PrimaryPathConfig> = {},
+): Mem0PrimaryPathConfig {
+  const mem0BaseUrl = overrides.mem0BaseUrl ?? source.MEM0_BASE_URL;
+  const mem0ApiKey = overrides.mem0ApiKey ?? source.MEM0_API_KEY;
+  const mem0UserId = overrides.mem0UserId ?? source.MEM0_USER_ID;
+
+  const missingKeys = [
+    !mem0BaseUrl ? "MEM0_BASE_URL" : null,
+    !mem0ApiKey ? "MEM0_API_KEY" : null,
+    !mem0UserId ? "MEM0_USER_ID" : null,
+  ].filter((key): key is string => key !== null);
+
+  if (missingKeys.length > 0) {
+    throw new AppError({
+      code: "CONFIG_MISSING",
+      message: "知识流程主路径需要 mem0 HTTP 配置。",
+      details: { missingKeys },
+    });
+  }
+
+  return {
+    mem0BaseUrl: mem0BaseUrl as string,
+    mem0ApiKey: mem0ApiKey as string,
+    mem0UserId: mem0UserId as string,
+  };
 }
 
 function parseProjectAllowlist(value?: string): string[] {

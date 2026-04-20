@@ -18,9 +18,9 @@
 
 | 状态        | 数量 |
 | ----------- | ---: |
-| done        |  172 |
+| done        |  174 |
 | in_progress |    0 |
-| pending     |   11 |
+| pending     |    9 |
 | blocked     |    0 |
 
 ## Phase 1：项目基线与工程治理
@@ -326,8 +326,8 @@
 | T170 | done    | github-branch-pr-pipeline            | T168                |
 | T171 | done    | github-checks-gate-webhook           | T170                |
 | T172 | done    | playwright-real-execution-runtime    | T168                |
-| T173 | pending | acceptance-real-evidence-gate        | T169,T172           |
-| T174 | pending | knowledge-mem0-http-primary-path     | T165                |
+| T173 | done    | acceptance-real-evidence-gate        | T169,T172           |
+| T174 | done    | knowledge-mem0-http-primary-path     | T165                |
 | T175 | pending | knowledge-fail-closed-obsidian-sync  | T174                |
 | T176 | pending | temporal-planrun-real-workflow       | T166,T168           |
 | T177 | pending | temporal-taskrun-recovery-signals    | T176                |
@@ -1023,8 +1023,18 @@ knowledgePolicy:
   reusableScoreThreshold: 0.7
   stabilityScoreThreshold: 0.75
   confidenceThreshold: 0.8
-status: PLANNED
+status: DONE
 ```
+
+已完成证据：
+
+- `src/services/evaluator.ts` 已新增真实证据门禁：缺少可信结构化证据时直接追加“缺少真实验收证据”；仅有 `execution_mode=simulated` 且无外部真实证据时直接追加“不能判定 passed”。
+- `tests/acceptance.test.ts` 已新增回归：模拟执行结果在缺少真实外部证据时会被阻塞。
+- `tests/workflow.test.ts`、`tests/orchestration.test.ts`、`tests/api.test.ts`、`tests/golden-path.test.ts` 已统一改为 fail-closed 预期，验证 simulated 执行只推进首个任务到 `AWAITING_ACCEPTANCE`，不会伪造 `DONE` 或知识发布。
+- 真实验证结果：
+  - `npm run typecheck` 通过。
+  - `npm run build && node --test dist/tests/acceptance.test.js dist/tests/workflow.test.js dist/tests/orchestration.test.js dist/tests/api.test.js dist/tests/golden-path.test.js` 通过。
+  - `npm test` 通过，结果为 `108 passed / 0 failed / 1 skipped`。
 
 #### T174 `knowledge-mem0-http-primary-path`
 
@@ -1079,8 +1089,23 @@ knowledgePolicy:
   reusableScoreThreshold: 0.7
   stabilityScoreThreshold: 0.75
   confidenceThreshold: 0.8
-status: PLANNED
+status: DONE
 ```
+
+已完成证据：
+
+- `src/services/knowledge-workflow.ts` 已切到 mem0 HTTP 主路径：`createCandidate()` 与 `handleBudgetRejection()` 现在都会优先写入真实 mem0，再推进 candidate/deferred 队列；配置缺失或写入失败直接抛出 blocked。
+- `src/integrations/mem0-http-adapter.ts` 已新增同步写入能力，覆盖 candidate 与 deferred 两类记录，并把 `kind/scope/knowledgeId/scores/budgetDecision` 写入 mem0 metadata。
+- `src/core/config/env.ts` 已新增 `resolveMem0PrimaryPathConfig()`，集中解析 `MEM0_BASE_URL`、`MEM0_API_KEY`、`MEM0_USER_ID`，缺失即返回结构化 `CONFIG_MISSING`。
+- `tests/mem0-obsidian.test.ts` 已覆盖：
+  - candidate 写入真实 mem0 HTTP 主路径；
+  - deferred 写入真实 mem0 HTTP 主路径；
+  - 配置缺失时知识流程 fail-closed / blocked；
+  - 不再依赖 `InMemoryStore.mem0Entries` 作为知识主路径。
+- `tests/knowledge-budget.test.ts` 与 `tests/knowledge-overload.test.ts` 已改为显式注入 mem0 stub，保证预算与过载回归在新主路径约束下仍可稳定验证。
+- 真实验证结果：
+  - `npm run typecheck` 通过。
+  - `npm test` 通过，结果为 `108 passed / 0 failed / 1 skipped`。
 
 #### T175 `knowledge-fail-closed-obsidian-sync`
 

@@ -2,6 +2,11 @@ import {
   DEFAULT_KNOWLEDGE_BUDGET,
   DEFAULT_KNOWLEDGE_THRESHOLDS,
 } from "../config/defaults.js";
+import type {
+  Mem0PrimaryPathConfig,
+} from "../core/config/env.js";
+import { resolveMem0PrimaryPathConfig } from "../core/config/env.js";
+import { AppError } from "../core/errors/app-error.js";
 import type { AcceptanceResult } from "../domain/acceptance.js";
 import type {
   BudgetDecision,
@@ -11,22 +16,51 @@ import type {
   KnowledgeRecord,
 } from "../domain/knowledge.js";
 import type { TaskUnit } from "../domain/task-unit.js";
+import { Mem0HttpAdapter } from "../integrations/mem0-http-adapter.js";
 import { InMemoryStore } from "../runtime/in-memory-store.js";
 import { KnowledgeRegistry } from "./knowledge-registry.js";
-import { Mem0Adapter } from "./mem0-adapter.js";
 import { ObsidianKnowledgeService } from "./obsidian-knowledge.js";
+
+export interface KnowledgeWorkflowOptions {
+  mem0?: Mem0HttpAdapter;
+  mem0Config?: Partial<Mem0PrimaryPathConfig>;
+  envSource?: NodeJS.ProcessEnv;
+}
 
 export class KnowledgeWorkflow {
   private readonly registry = new KnowledgeRegistry();
-  private readonly mem0: Mem0Adapter;
+  private readonly mem0?: Mem0HttpAdapter;
+  private readonly mem0UserId?: string;
+  private readonly mem0InitError?: AppError;
   private readonly budgetPolicy: KnowledgeBudgetPolicy =
     DEFAULT_KNOWLEDGE_BUDGET;
 
   constructor(
     private readonly store: InMemoryStore,
     private readonly obsidian: ObsidianKnowledgeService | null = null,
+    options: KnowledgeWorkflowOptions = {},
   ) {
-    this.mem0 = new Mem0Adapter(this.store);
+    try {
+      if (options.mem0) {
+        this.mem0 = options.mem0;
+        this.mem0UserId = resolveMem0UserId(
+          options.envSource,
+          options.mem0Config,
+        );
+      } else {
+        const config = resolveMem0PrimaryPathConfig(
+          options.envSource,
+          options.mem0Config,
+        );
+        this.mem0 = new Mem0HttpAdapter({
+          baseUrl: config.mem0BaseUrl,
+          apiKey: config.mem0ApiKey,
+        });
+        this.mem0UserId = config.mem0UserId;
+      }
+    } catch (error) {
+      this.mem0InitError = toAppError(error, "mem0 主路径初始化失败。");
+    }
   }
 
   createCandidate(
@@ -78,9 +112,8 @@ export class KnowledgeWorkflow {
       },
     });
 
-    candidate.mem0Key = this.mem0.buildCandidateKey(candidate);
+    this.persistCandidateToMem0(candidate);
     this.registry.recordCandidateCreated(candidate);
-    this.mem0.saveCandidate(candidate);
     this.store.candidateQueue.push(candidate);
     return candidate;
   }
@@ -237,14 +270,14 @@ export class KnowledgeWorkflow {
     candidate: KnowledgeCandidate,
     decision: BudgetDecision,
   ): void {
+    this.persistDeferredCandidateToMem0(candidate, decision);
+
     if (decision.reason === "archived") {
       this.store.archivedCandidates.push({ candidate, decision });
-      this.mem0.saveDeferredCandidate(candidate);
       return;
     }
 
     this.store.deferredCandidates.push({ candidate, decision });
-    this.mem0.saveDeferredCandidate(candidate);
   }
 
   async publishBudgetedCandidates(): Promise<KnowledgeRecord[]> {
@@ -293,6 +326,65 @@ export class KnowledgeWorkflow {
 
   private buildKnowledgeId(task: TaskUnit): string {
     return task.taskId.replace(/^task-/, "").replace(/-/g, ".");
+  }
+
+  private persistCandidateToMem0(candidate: KnowledgeCandidate): void {
+    const mem0 = this.requireMem0();
+
+    try {
+      const result = mem0.adapter.saveCandidateSync(candidate, mem0.userId);
+      candidate.mem0Key = result.id;
+    } catch (error) {
+      throw toAppError(error, "知识候选写入 mem0 失败，知识流程已 blocked。", {
+        candidateId: candidate.candidateId,
+        knowledgeId: candidate.knowledgeId,
+        mem0RecordKind: "candidate",
+      });
+    }
+  }
+
+  private persistDeferredCandidateToMem0(
+    candidate: KnowledgeCandidate,
+    decision: BudgetDecision,
+  ): void {
+    const mem0 = this.requireMem0();
+
+    try {
+      const result = mem0.adapter.saveDeferredCandidateSync(
+        candidate,
+        mem0.userId,
+        decision,
+      );
+      candidate.mem0Key = result.id;
+    } catch (error) {
+      throw toAppError(error, "知识 deferred 记录写入 mem0 失败，知识流程已 blocked。", {
+        candidateId: candidate.candidateId,
+        knowledgeId: candidate.knowledgeId,
+        mem0RecordKind: "deferred",
+        decisionReason: decision.reason,
+      });
+    }
+  }
+
+  private requireMem0(): { adapter: Mem0HttpAdapter; userId: string } {
+    if (this.mem0InitError) {
+      throw toAppError(
+        this.mem0InitError,
+        "知识流程 blocked：mem0 HTTP 主路径配置缺失或不可用。",
+      );
+    }
+
+    if (!this.mem0 || !this.mem0UserId) {
+      throw new AppError({
+        code: "CONFIG_MISSING",
+        message: "知识流程 blocked：mem0 HTTP 主路径未就绪。",
+      });
+    }
+
+    return {
+      adapter: this.mem0,
+      userId: this.mem0UserId,
+    };
   }
 
   private rankCandidates(): KnowledgeCandidate[] {
@@ -399,4 +491,48 @@ export class KnowledgeWorkflow {
     }
     return `backend/${segments}`;
   }
+}
+
+function toAppError(
+  error: unknown,
+  message: string,
+  details?: Record<string, unknown>,
+): AppError {
+  if (error instanceof AppError) {
+    return new AppError({
+      code: error.code,
+      message,
+      details: {
+        ...(error.details ?? {}),
+        ...(details ?? {}),
+      },
+      cause: error,
+    });
+  }
+
+  return new AppError({
+    code: "EXTERNAL_UNAVAILABLE",
+    message,
+    details,
+    cause: error,
+  });
+}
+
+function resolveMem0UserId(
+  source: NodeJS.ProcessEnv | undefined,
+  overrides: Partial<Mem0PrimaryPathConfig> | undefined,
+): string {
+  const mem0UserId = overrides?.mem0UserId ?? source?.MEM0_USER_ID;
+
+  if (!mem0UserId) {
+    throw new AppError({
+      code: "CONFIG_MISSING",
+      message: "知识流程主路径需要 mem0 userId 配置。",
+      details: {
+        missingKeys: ["MEM0_USER_ID"],
+      },
+    });
+  }
+
+  return mem0UserId;
 }

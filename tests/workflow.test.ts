@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { WorkflowEngine } from "../src/workflow/engine.js";
 
-test("工作流引擎会把通过验收的高分候选发布为长期知识", async () => {
+test("工作流引擎在 simulated 执行下会 fail-closed 并停在验收门禁前", async () => {
   const engine = new WorkflowEngine({
     obsidianEnabled: false,
     obsidianRoot: undefined,
@@ -14,37 +14,26 @@ test("工作流引擎会把通过验收的高分候选发布为长期知识", as
   });
 
   assert.equal(result.tasks.length, 7);
+  assert.equal(result.assignments, 1);
+  assert.equal(result.publishedKnowledge.length, 0);
+  assert.equal(result.acceptanceResults.length, 1);
+  assert.equal(result.acceptanceResults[0]?.taskId, "backend-user-register");
+  assert.equal(result.acceptanceResults[0]?.result.status, "blocked");
   assert.equal(
-    result.tasks.filter((task) => task.status === "DONE").length,
-    result.tasks.length,
-  );
-  assert.equal(result.assignments, result.tasks.length);
-  assert.equal(result.publishedKnowledge.length, 5);
-  assert.equal(
-    result.publishedKnowledge.every((record) => record.notePath === undefined),
-    true,
-  );
-  assert.deepEqual(
-    result.publishedKnowledge
-      .map((record) => record.knowledgeId)
-      .sort((left, right) => left.localeCompare(right)),
-    [
-      "backend.user.register",
-      "backend.user.login",
-      "backend.user.jwt",
-      "frontend.auth.pages",
-      "knowledge.auth.flow",
-    ].sort((left, right) => left.localeCompare(right)),
-  );
-  assert.equal(
-    result.publishedKnowledge.every((record) => record.summary.includes("已验证")),
+    result.acceptanceResults[0]?.result.rootCause.includes("缺少真实验收证据"),
     true,
   );
   assert.equal(
-    result.publishedKnowledge.every((record) =>
-      record.sourceRefs.some((ref) => ref.startsWith("task:")),
-    ),
+    result.acceptanceResults[0]?.result.rootCause.includes("当前仅有 simulated 证据"),
     true,
+  );
+  assert.equal(
+    result.tasks.filter((task) => task.status === "AWAITING_ACCEPTANCE").length,
+    1,
+  );
+  assert.equal(
+    result.tasks.filter((task) => task.status === "PLANNED").length,
+    6,
   );
 });
 

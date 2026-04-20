@@ -31,7 +31,7 @@ function createEnv(databaseUrl: string): AppEnv {
   };
 }
 
-test("黄金路径：从高层任务到知识发布的控制平面全链路通过", async () => {
+test("黄金路径：simulated 执行默认 fail-closed，不会伪造通过与知识发布", async () => {
   const root = await mkdtemp(join(tmpdir(), "agentforge-golden-"));
   const server = createHttpApp(createEnv(join(root, "db.json")));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -64,8 +64,8 @@ test("黄金路径：从高层任务到知识发布的控制平面全链路通�
       assignmentCount: number;
       publishedKnowledgeCount: number;
     };
-    assert.equal(run.assignmentCount, 7);
-    assert.equal(run.publishedKnowledgeCount >= 5, true);
+    assert.equal(run.assignmentCount, 1);
+    assert.equal(run.publishedKnowledgeCount, 0);
 
     const statusResponse = await fetch(`${baseUrl}/api/plans/${created.planId}/status`);
     const status = (await statusResponse.json()) as {
@@ -74,24 +74,21 @@ test("黄金路径：从高层任务到知识发布的控制平面全链路通�
       taskCount: number;
     };
     assert.equal(status.runStatus, "completed");
-    assert.equal(status.doneTaskCount, status.taskCount);
+    assert.equal(status.taskCount, 7);
+    assert.equal(status.doneTaskCount, 0);
 
     const knowledgeResponse = await fetch(`${baseUrl}/api/knowledge`);
     const knowledge = (await knowledgeResponse.json()) as {
       records: Array<{ knowledgeId: string; status: string }>;
     };
-    assert.equal(knowledge.records.length >= 5, true);
-    assert.equal(
-      knowledge.records.some((record) => record.knowledgeId === "knowledge.auth.flow"),
-      true,
-    );
+    assert.equal(knowledge.records.length, 0);
 
     const metricsResponse = await fetch(`${baseUrl}/api/metrics/snapshot`);
     const metrics = (await metricsResponse.json()) as {
       businessMetrics: { completedTasks: number; acceptancePassRate: number };
     };
-    assert.equal(metrics.businessMetrics.completedTasks, 7);
-    assert.equal(metrics.businessMetrics.acceptancePassRate > 0.99, true);
+    assert.equal(metrics.businessMetrics.completedTasks, 0);
+    assert.equal(metrics.businessMetrics.acceptancePassRate, 0);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),

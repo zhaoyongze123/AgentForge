@@ -165,7 +165,7 @@ test("Dispatcher 会创建租约并支持释放", () => {
   assert.equal(leaseState.taskLeases.has("task-a"), false);
 });
 
-test("Workflow Engine 会为调度任务生成 Assignment", async () => {
+test("Workflow Engine 在 simulated 执行下只会为首个任务生成 Assignment", async () => {
   const { WorkflowEngine } = await import("../src/workflow/engine.js");
   const engine = new WorkflowEngine();
   const result = await engine.run({
@@ -173,5 +173,7 @@ test("Workflow Engine 会为调度任务生成 Assignment", async () => {
     phase: "phase-2",
   });
 
-  assert.equal(result.assignments, 7);
+  assert.equal(result.assignments, 1);
+  assert.equal(result.acceptanceResults.length, 1);
+  assert.equal(result.acceptanceResults[0]?.result.status, "blocked");
 });

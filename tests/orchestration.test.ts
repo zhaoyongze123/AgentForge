@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { runLangGraphPlan } from "../src/orchestration/langgraph/graph.js";
 import { TemporalControlPlaneClient } from "../src/orchestration/temporal/client.js";
 
-test("LangGraph 编排图可运行并返回完整工作流结果", async () => {
+test("LangGraph 编排图在 simulated 执行下会停在验收门禁前", async () => {
   const result = await runLangGraphPlan(
     {
       request: "做一个用户系统",
@@ -18,9 +18,14 @@ test("LangGraph 编排图可运行并返回完整工作流结果", async () => {
   );
 
   assert.equal(result.tasks.length, 7);
-  assert.equal(result.assignmentRecords.length, 7);
-  assert.equal(result.acceptanceResults.length, 7);
-  assert.equal(result.publishedKnowledge.length, 5);
+  assert.equal(result.assignmentRecords.length, 1);
+  assert.equal(result.acceptanceResults.length, 1);
+  assert.equal(result.acceptanceResults[0]?.result.status, "blocked");
+  assert.equal(result.publishedKnowledge.length, 0);
+  assert.equal(
+    result.tasks.filter((task) => task.status === "AWAITING_ACCEPTANCE").length,
+    1,
+  );
 });
 
 test(

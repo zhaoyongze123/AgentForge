@@ -5,6 +5,7 @@ import { InMemoryStore } from "../src/runtime/in-memory-store.js";
 import { KnowledgeWorkflow } from "../src/services/knowledge-workflow.js";
 import type { AcceptanceResult } from "../src/domain/acceptance.js";
 import type { TaskUnit } from "../src/domain/task-unit.js";
+import type { Mem0HttpAdapter } from "../src/integrations/mem0-http-adapter.js";
 
 function createTask(index: number): TaskUnit {
   return {
@@ -59,9 +60,35 @@ function createAcceptance(index: number): AcceptanceResult {
   };
 }
 
+function createWorkflow(store: InMemoryStore): KnowledgeWorkflow {
+  const mem0 = {
+    saveCandidateSync(task: { candidateId: string; scope: string; knowledgeId: string }) {
+      return {
+        id: `mem0-candidate-${task.candidateId}`,
+        key: `candidate:${task.scope}:${task.knowledgeId}`,
+      };
+    },
+    saveDeferredCandidateSync(task: { candidateId: string; scope: string; knowledgeId: string }) {
+      return {
+        id: `mem0-deferred-${task.candidateId}`,
+        key: `deferred:${task.scope}:${task.knowledgeId}`,
+      };
+    },
+  } as unknown as Mem0HttpAdapter;
+
+  return new KnowledgeWorkflow(store, null, {
+    mem0,
+    mem0Config: {
+      mem0BaseUrl: "http://mem0.test",
+      mem0ApiKey: "mem0-token",
+      mem0UserId: "knowledge-overload-test",
+    },
+  });
+}
+
 test("知识失控回归：高吞吐候选不会突破 Top-K 和预算门控", async () => {
   const store = new InMemoryStore();
-  const workflow = new KnowledgeWorkflow(store, null);
+  const workflow = createWorkflow(store);
 
   for (let index = 0; index < 100; index += 1) {
     workflow.createCandidate(createTask(index), createAcceptance(index));

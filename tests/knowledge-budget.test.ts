@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { KnowledgeCandidate } from "../src/domain/knowledge.js";
+import type { Mem0HttpAdapter } from "../src/integrations/mem0-http-adapter.js";
 import { InMemoryStore } from "../src/runtime/in-memory-store.js";
 import { KnowledgeWorkflow } from "../src/services/knowledge-workflow.js";
 
@@ -30,9 +31,35 @@ function createCandidate(
   };
 }
 
+function createWorkflow(store: InMemoryStore): KnowledgeWorkflow {
+  const mem0 = {
+    saveCandidateSync(candidate: KnowledgeCandidate) {
+      return {
+        id: `mem0-candidate-${candidate.candidateId}`,
+        key: `candidate:${candidate.scope}:${candidate.knowledgeId}`,
+      };
+    },
+    saveDeferredCandidateSync(candidate: KnowledgeCandidate) {
+      return {
+        id: `mem0-deferred-${candidate.candidateId}`,
+        key: `deferred:${candidate.scope}:${candidate.knowledgeId}`,
+      };
+    },
+  } as unknown as Mem0HttpAdapter;
+
+  return new KnowledgeWorkflow(store, null, {
+    mem0,
+    mem0Config: {
+      mem0BaseUrl: "http://mem0.test",
+      mem0ApiKey: "mem0-token",
+      mem0UserId: "knowledge-budget-test",
+    },
+  });
+}
+
 test("预算策略会维护小时窗口统计", () => {
   const store = new InMemoryStore();
-  const workflow = new KnowledgeWorkflow(store);
+  const workflow = createWorkflow(store);
   const candidate = createCandidate();
 
   store.candidateQueue.push(candidate);
@@ -44,7 +71,7 @@ test("预算策略会维护小时窗口统计", () => {
 
 test("预算策略会按 publish_score 排序并只放行 Top-K", () => {
   const store = new InMemoryStore();
-  const workflow = new KnowledgeWorkflow(store);
+  const workflow = createWorkflow(store);
   const high = createCandidate({
     candidateId: "kc-high",
     scores: {
@@ -94,7 +121,7 @@ test("预算策略会按 publish_score 排序并只放行 Top-K", () => {
 
 test("超过 scope 每小时预算时会 deferred", () => {
   const store = new InMemoryStore();
-  const workflow = new KnowledgeWorkflow(store);
+  const workflow = createWorkflow(store);
 
   store.knowledgeBudgetWindow = {
     windowStart: "2026-04-16T10:00:00.000Z",
@@ -114,7 +141,7 @@ test("超过 scope 每小时预算时会 deferred", () => {
 
 test("预算拒绝会写入 deferred 或 archived 队列", () => {
   const store = new InMemoryStore();
-  const workflow = new KnowledgeWorkflow(store);
+  const workflow = createWorkflow(store);
   const archived = createCandidate({
     candidateId: "kc-archived",
     scores: {
