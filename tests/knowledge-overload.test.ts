@@ -4,8 +4,10 @@ import test from "node:test";
 import { InMemoryStore } from "../src/runtime/in-memory-store.js";
 import { KnowledgeWorkflow } from "../src/services/knowledge-workflow.js";
 import type { AcceptanceResult } from "../src/domain/acceptance.js";
+import type { KnowledgeRecord } from "../src/domain/knowledge.js";
 import type { TaskUnit } from "../src/domain/task-unit.js";
 import type { Mem0HttpAdapter } from "../src/integrations/mem0-http-adapter.js";
+import type { ObsidianKnowledgeService } from "../src/services/obsidian-knowledge.js";
 
 function createTask(index: number): TaskUnit {
   return {
@@ -75,8 +77,13 @@ function createWorkflow(store: InMemoryStore): KnowledgeWorkflow {
       };
     },
   } as unknown as Mem0HttpAdapter;
+  const obsidian = {
+    async writeRecord(record: KnowledgeRecord) {
+      return `/tmp/agentforge-vault/${record.knowledgeId}.md`;
+    },
+  } as unknown as ObsidianKnowledgeService;
 
-  return new KnowledgeWorkflow(store, null, {
+  return new KnowledgeWorkflow(store, obsidian, {
     mem0,
     mem0Config: {
       mem0BaseUrl: "http://mem0.test",

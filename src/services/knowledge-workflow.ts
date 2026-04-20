@@ -187,7 +187,7 @@ export class KnowledgeWorkflow {
     };
   }
 
-  publish(candidate: KnowledgeCandidate): KnowledgeRecord | null {
+  async publish(candidate: KnowledgeCandidate): Promise<KnowledgeRecord | null> {
     const acceptance = this.store.acceptanceResults.get(
       candidate.candidateId.replace(/^kc-/, ""),
     );
@@ -253,7 +253,11 @@ export class KnowledgeWorkflow {
             ]
           : [],
       updatedAt: new Date().toISOString(),
+      mem0Key: analysis.normalizedCandidate.mem0Key,
     };
+
+    const notePath = await this.writePublishedRecord(candidate, record);
+    record.notePath = notePath;
 
     const updatedExisting = this.registry.applySupersedes(existing, record);
     this.store.knowledgeRecords.set(analysis.normalizedCandidate.knowledgeId, [
@@ -290,12 +294,8 @@ export class KnowledgeWorkflow {
         continue;
       }
 
-      const publishedRecord = this.publish(candidate);
+      const publishedRecord = await this.publish(candidate);
       if (publishedRecord) {
-        if (this.obsidian) {
-          publishedRecord.notePath =
-            await this.obsidian.writeRecord(publishedRecord);
-        }
         publishedRecords.push(publishedRecord);
       }
     }
@@ -304,20 +304,27 @@ export class KnowledgeWorkflow {
   }
 
   async syncArchivedKnowledge(): Promise<KnowledgeRecord[]> {
-    if (!this.obsidian) {
+    const archivedRecords: KnowledgeRecord[] = [];
+    const pendingArchive = [...this.store.knowledgeRecords.values()]
+      .flat()
+      .filter((record) => record.status === "archived" && Boolean(record.notePath));
+
+    if (pendingArchive.length === 0) {
       return [];
     }
 
-    const archivedRecords: KnowledgeRecord[] = [];
+    const obsidian = this.requireObsidian();
 
-    for (const records of this.store.knowledgeRecords.values()) {
-      for (const record of records) {
-        if (record.status !== "archived" || !record.notePath) {
-          continue;
-        }
-
-        record.notePath = await this.obsidian.archiveRecord(record);
+    for (const record of pendingArchive) {
+      try {
+        record.notePath = await obsidian.archiveRecord(record);
         archivedRecords.push(record);
+      } catch (error) {
+        throw toAppError(error, "知识归档写入 Obsidian 失败，知识流程已 blocked。", {
+          knowledgeId: record.knowledgeId,
+          version: record.version,
+          notePath: record.notePath,
+        });
       }
     }
 
@@ -385,6 +392,45 @@ export class KnowledgeWorkflow {
       adapter: this.mem0,
       userId: this.mem0UserId,
     };
+  }
+
+  private requireObsidian(): ObsidianKnowledgeService {
+    if (!this.obsidian) {
+      throw new AppError({
+        code: "CONFIG_MISSING",
+        message: "知识流程 blocked：Obsidian 主库未就绪。",
+      });
+    }
+
+    return this.obsidian;
+  }
+
+  private async writePublishedRecord(
+    candidate: KnowledgeCandidate,
+    record: KnowledgeRecord,
+  ): Promise<string> {
+    if (!record.mem0Key) {
+      throw new AppError({
+        code: "CONFIG_INVALID",
+        message: "知识发布 blocked：缺少 mem0 发布关联 id。",
+        details: {
+          candidateId: candidate.candidateId,
+          knowledgeId: candidate.knowledgeId,
+        },
+      });
+    }
+
+    const obsidian = this.requireObsidian();
+
+    try {
+      return await obsidian.writeRecord(record);
+    } catch (error) {
+      throw toAppError(error, "知识发布写入 Obsidian 失败，知识流程已 blocked。", {
+        candidateId: candidate.candidateId,
+        knowledgeId: candidate.knowledgeId,
+        mem0Key: record.mem0Key,
+      });
+    }
   }
 
   private rankCandidates(): KnowledgeCandidate[] {

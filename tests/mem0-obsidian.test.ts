@@ -114,6 +114,7 @@ function createRecord(
     supersedes: overrides.supersedes ?? [],
     updatedAt: overrides.updatedAt ?? "2026-04-16T12:00:00.000Z",
     supersededBy: overrides.supersededBy,
+    mem0Key: overrides.mem0Key,
     notePath: overrides.notePath,
   };
 }
@@ -216,17 +217,127 @@ test("mem0 配置缺失时 KnowledgeWorkflow fail-closed / blocked", () => {
   assert.equal(store.candidateQueue.length, 0);
 });
 
+test("KnowledgeWorkflow 发布成功时记录同时包含 mem0 id 与 notePath", async () => {
+  const server = await startMem0Server();
+  const root = await mkdtemp(join(tmpdir(), "agentforge-obsidian-publish-"));
+
+  try {
+    const store = new InMemoryStore();
+    const workflow = new KnowledgeWorkflow(
+      store,
+      new ObsidianKnowledgeService(root),
+      {
+        mem0: new Mem0HttpAdapter({
+          baseUrl: server.baseUrl,
+          apiKey: "mem0-token",
+        }),
+        mem0Config: {
+          mem0UserId: "agentforge-test",
+        },
+      },
+    );
+
+    const task = createTask();
+    const acceptance = createAcceptance({
+      knowledgeDraft: {
+        title: "认证链路稳定经验",
+        summary: "认证链路稳定经验",
+        recommendation: "优先使用 refresh token",
+        constraints: ["需要 refresh token 机制"],
+        sourceRefs: ["task:knowledge-auth-flow"],
+        derivedFrom: ["acceptance:passed"],
+      },
+    });
+    store.acceptanceResults.set(task.taskId, acceptance);
+
+    const candidate = workflow.createCandidate(task, acceptance);
+    const published = await workflow.publishBudgetedCandidates();
+    const content = await readFile(published[0]?.notePath ?? "", "utf8");
+
+    assert.ok(candidate);
+    assert.equal(published.length, 1);
+    assert.equal(published[0]?.mem0Key, candidate?.mem0Key);
+    assert.equal(Boolean(published[0]?.notePath), true);
+    assert.equal(content.includes(`mem0_id: ${candidate?.mem0Key}`), true);
+    assert.equal(store.knowledgeRecords.get("knowledge.auth.flow")?.length, 1);
+    assert.equal(store.publishedInCurrentWindow.length, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test("Obsidian 写入失败时 KnowledgeWorkflow 会 fail-closed 且不提交发布状态", async () => {
+  const server = await startMem0Server();
+
+  try {
+    const store = new InMemoryStore();
+    const workflow = new KnowledgeWorkflow(
+      store,
+      new FailingObsidianKnowledgeService(),
+      {
+        mem0: new Mem0HttpAdapter({
+          baseUrl: server.baseUrl,
+          apiKey: "mem0-token",
+        }),
+        mem0Config: {
+          mem0UserId: "agentforge-test",
+        },
+      },
+    );
+
+    const task = createTask();
+    const acceptance = createAcceptance();
+    store.acceptanceResults.set(task.taskId, acceptance);
+    workflow.createCandidate(task, acceptance);
+
+    await assert.rejects(
+      () => workflow.publishBudgetedCandidates(),
+      (error: unknown) =>
+        error instanceof AppError &&
+        error.code === "EXTERNAL_UNAVAILABLE" &&
+        error.message.includes("Obsidian"),
+    );
+    assert.equal(store.knowledgeRecords.size, 0);
+    assert.equal(store.publishedInCurrentWindow.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
 test("ObsidianKnowledgeService 能把长期知识写成 Markdown", async () => {
   const root = await mkdtemp(join(tmpdir(), "agentforge-obsidian-"));
   const service = new ObsidianKnowledgeService(root);
-  const record = createRecord();
+  const record = createRecord({
+    mem0Key: "mem0-memory-1",
+  });
 
   const notePath = await service.writeRecord(record);
   const content = await readFile(notePath, "utf8");
 
   assert.equal(notePath.includes("knowledge/patterns/knowledge/auth"), true);
   assert.equal(content.includes("knowledge_id: knowledge.auth.flow"), true);
+  assert.equal(content.includes("mem0_id: mem0-memory-1"), true);
   assert.equal(content.includes("## 推荐规则"), true);
+});
+
+test("ObsidianKnowledgeService 归档时会返回可追溯 archive 路径", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentforge-obsidian-archive-"));
+  const service = new ObsidianKnowledgeService(root);
+  const writtenPath = await service.writeRecord(
+    createRecord({
+      mem0Key: "mem0-memory-1",
+    }),
+  );
+
+  const archivedPath = await service.archiveRecord(
+    createRecord({
+      mem0Key: "mem0-memory-1",
+      notePath: writtenPath,
+    }),
+  );
+
+  assert.equal(archivedPath.includes("/knowledge/archive/"), true);
+  assert.equal((await readFile(archivedPath, "utf8")).includes("mem0_id: mem0-memory-1"), true);
 });
 
 test("ObsidianKnowledgeService 会按 candidateType 映射到固定目录", () => {
@@ -337,6 +448,16 @@ interface Mem0HttpRequest {
       reason?: string;
     };
   };
+}
+
+class FailingObsidianKnowledgeService extends ObsidianKnowledgeService {
+  constructor() {
+    super("/tmp/agentforge-failing-obsidian");
+  }
+
+  override async writeRecord(_record: KnowledgeRecord): Promise<string> {
+    throw new Error("obsidian write failed");
+  }
 }
 
 async function waitForPortFile(path: string, timeoutMs = 5000): Promise<number> {

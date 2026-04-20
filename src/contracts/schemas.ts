@@ -121,6 +121,8 @@ export const knowledgeRecordSchema = z.object({
   derivedFrom: z.array(z.string()),
   supersedes: z.array(z.string()),
   updatedAt: z.string().datetime(),
+  mem0Key: z.string().min(1).optional(),
+  notePath: z.string().min(1).optional(),
 });
 
 export const knowledgeCandidateSchema = z.object({

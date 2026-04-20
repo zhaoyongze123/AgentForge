@@ -56,6 +56,7 @@ export class ObsidianKnowledgeService {
       `- status: ${record.status}`,
       `- confidence: ${record.confidence}`,
       `- updated_at: ${record.updatedAt}`,
+      `- mem0_id: ${record.mem0Key ?? "无"}`,
       "",
       "## 推荐规则",
       record.recommendation,
@@ -92,7 +93,8 @@ export class ObsidianKnowledgeService {
 
   async archiveRecord(record: KnowledgeRecord): Promise<string> {
     const mapping = this.mapRecord(record);
-    const sourcePath = join(this.vaultRoot, mapping.relativePath);
+    const sourcePath =
+      record.notePath ?? join(this.vaultRoot, mapping.relativePath);
     const archivePath = join(
       this.vaultRoot,
       "knowledge",

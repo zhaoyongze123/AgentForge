@@ -21,6 +21,7 @@ export interface KnowledgeRecord {
   supersedes: string[];
   updatedAt: string;
   supersededBy?: string;
+  mem0Key?: string;
   notePath?: string;
 }
 

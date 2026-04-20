@@ -18,9 +18,9 @@
 
 | 状态        | 数量 |
 | ----------- | ---: |
-| done        |  174 |
+| done        |  175 |
 | in_progress |    0 |
-| pending     |    9 |
+| pending     |    8 |
 | blocked     |    0 |
 
 ## Phase 1：项目基线与工程治理
@@ -1159,8 +1159,24 @@ knowledgePolicy:
   reusableScoreThreshold: 0.7
   stabilityScoreThreshold: 0.75
   confidenceThreshold: 0.8
-status: PLANNED
+status: DONE
 ```
+
+已完成证据：
+
+- `src/services/knowledge-workflow.ts` 已把发布提交边界前移：只有在 `mem0Key` 存在且 `ObsidianKnowledgeService.writeRecord()` 成功后，才会把 `KnowledgeRecord` 写入 `store.knowledgeRecords`、增加预算窗口并记录 `published` audit，避免出现“内存已发布、Obsidian 失败”的半成功状态。
+- `src/services/knowledge-workflow.ts` 已新增 `requireObsidian()` 与 `writePublishedRecord()`，对 `mem0` 关联 id 缺失、Obsidian 未就绪、Obsidian 写入失败都改为显式 blocked。
+- `src/domain/knowledge.ts` 与 `src/contracts/schemas.ts` 已为 `KnowledgeRecord` 补充 `mem0Key`/`notePath` 可选字段，发布成功记录现在可同时持有 mem0 id 和 notePath。
+- `src/services/obsidian-knowledge.ts` 已把 `mem0_id` 写入笔记元信息，并在归档时优先使用 `record.notePath` 作为源路径，保证 archive 路径可追溯。
+- `tests/mem0-obsidian.test.ts` 已新增回归：
+  - 发布成功时记录同时包含 `mem0Key` 与 `notePath`
+  - Obsidian 写入失败时 fail-closed，且不提交发布状态
+  - archive 返回可追溯路径
+- `tests/knowledge-overload.test.ts` 已补 Obsidian stub，使知识发布预算回归在新门禁下继续可验证。
+- 真实验证结果：
+  - `npm run typecheck` 通过。
+  - `npm run build && node --test dist/tests/mem0-obsidian.test.js dist/tests/knowledge-overload.test.js dist/tests/knowledge-budget.test.js dist/tests/contracts.test.js dist/tests/persistence.test.js` 通过。
+  - `npm test` 通过，结果为 `111 passed / 0 failed / 1 skipped`。
 
 #### T176 `temporal-planrun-real-workflow`
 
